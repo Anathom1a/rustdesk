@@ -2,7 +2,7 @@ name: RemIT — образ сервера (hbbs и hbbr)
 
 # Собирает hbbs и hbbr из lejianwen/rustdesk-server (ветка forapi) с патчами
 # RemIT из remit/server-patches и публикует образ в GitHub Container Registry:
-#   ghcr.io/anathom1a/rustdesk-server-s6-remit:latest
+#   ghcr.io/anathom1a/remit-server:latest
 # Сборка идёт здесь, в публичном форке: у закрытого репозитория сайта нет
 # бесплатных минут Actions. В образе нет секретов — только открытый код.
 
@@ -19,7 +19,7 @@ permissions:
   packages: write
 
 env:
-  IMAGE_REPO: rustdesk-server-s6-remit
+  IMAGE_REPO: remit-server
 
 jobs:
   build:

@@ -9,7 +9,8 @@
 #   REMIT_SITE         адрес сайта и API, по умолчанию https://remit.su
 #   REMIT_APP_NAME     название продукта, по умолчанию RemIT
 #   REMIT_ID_SERVER    сервер идентификации, по умолчанию remit.su
-#   REMIT_RELAY_SERVER ретранслятор, по умолчанию remit.su
+#   REMIT_RELAY_SERVER ретранслятор; по умолчанию пусто — его выбирает сервер
+#                      (hbbs раздаёт ретрансляторы из админки сайта)
 #   REMIT_SUPPORT_URL  форма поддержки, по умолчанию <сайт>/kabinet/podderzhka
 #   REMIT_SOURCE_URL   исходники клиента, по умолчанию адрес самого форка
 #   REMIT_TEST_BUILD   true — собрать без ключа, только чтобы посмотреть
@@ -26,7 +27,7 @@ ROOT="$(cd "${HERE}/.." && pwd)"
 SITE="${REMIT_SITE:-https://remit.su}"
 APP_NAME="${REMIT_APP_NAME:-RemIT}"
 ID_SERVER="${REMIT_ID_SERVER:-remit.su}"
-RELAY_SERVER="${REMIT_RELAY_SERVER:-remit.su}"
+RELAY_SERVER="${REMIT_RELAY_SERVER-}"
 PUBLIC_KEY="${REMIT_PUBLIC_KEY:-0rexVZoXqaUjnIooWsmVscaVgkfLuxlpY7LN73X4UA0=}"
 # Куда ведёт приглашение написать в поддержку под главным окном.
 SUPPORT_URL="${REMIT_SUPPORT_URL:-${SITE%/}/kabinet/podderzhka}"
@@ -61,7 +62,7 @@ if [[ -z "$PUBLIC_KEY" ]]; then
     exit 1
 fi
 
-echo "==> Брендирование: ${APP_NAME}, ${SITE}, ${ID_SERVER} / ${RELAY_SERVER}"
+echo "==> Брендирование: ${APP_NAME}, ${SITE}, ${ID_SERVER} / ${RELAY_SERVER:-ретранслятор выбирает сервер}"
 echo "==> Поддержка: ${SUPPORT_URL}; исходники: ${SOURCE_URL}"
 python3 "${HERE}/patches/brand-client.py" "$ROOT" \
     --app-name "$APP_NAME" \

@@ -191,7 +191,6 @@ jobs:
           REMIT_SITE: ${{ vars.REMIT_SITE }}
           REMIT_APP_NAME: ${{ vars.REMIT_APP_NAME }}
           REMIT_ID_SERVER: ${{ vars.REMIT_ID_SERVER }}
-          REMIT_RELAY_SERVER: ${{ vars.REMIT_RELAY_SERVER }}
           REMIT_TEST_BUILD: ${{ env.REMIT_TEST_BUILD }}
         run: bash remit/apply-branding.sh
 
@@ -502,7 +501,6 @@ jobs:
           REMIT_SITE: ${{ vars.REMIT_SITE }}
           REMIT_APP_NAME: ${{ vars.REMIT_APP_NAME }}
           REMIT_ID_SERVER: ${{ vars.REMIT_ID_SERVER }}
-          REMIT_RELAY_SERVER: ${{ vars.REMIT_RELAY_SERVER }}
           REMIT_TEST_BUILD: ${{ env.REMIT_TEST_BUILD }}
         run: bash remit/apply-branding.sh
 
@@ -737,7 +735,6 @@ jobs:
           REMIT_SITE: ${{ vars.REMIT_SITE }}
           REMIT_APP_NAME: ${{ vars.REMIT_APP_NAME }}
           REMIT_ID_SERVER: ${{ vars.REMIT_ID_SERVER }}
-          REMIT_RELAY_SERVER: ${{ vars.REMIT_RELAY_SERVER }}
           REMIT_TEST_BUILD: ${{ env.REMIT_TEST_BUILD }}
         run: bash remit/apply-branding.sh
 

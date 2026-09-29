@@ -34,7 +34,7 @@
     python3 brand-client.py /path/to/rustdesk \
         --app-name RemIT \
         --id-server remit.su \
-        --relay-server remit.su \
+        --relay-server "" \
         --api-server https://remit.su \
         --update-url https://remit.su/api/version/latest \
         --public-key 'БАЗА64_КЛЮЧА_HBBS'
@@ -141,6 +141,11 @@ def lock_servers(path: Path, args: argparse.Namespace) -> None:
     Вместе это значит: клиент работает только в нашей сети, подменить
     ретранслятор через настройки, ключ командной строки --config или ручную
     правку конфига нельзя.
+
+    Ретранслятор по умолчанию закреплён пустым: тогда клиент берёт тот, что
+    назначил hbbs (rendezvous_mediator.rs, get_relay_server), а hbbs
+    распределяет соединения по ретрансляторам из админки сайта и сам
+    исключает недоступные. Непустое значение привязало бы всех к одному узлу.
     """
     source = path.read_text(encoding="utf-8")
     original = source
@@ -1103,7 +1108,11 @@ def main() -> int:
         help="Через запятую: названия прошлых клиентов, чьи настройки переносим",
     )
     parser.add_argument("--id-server", default="remit.su")
-    parser.add_argument("--relay-server", default="remit.su")
+    parser.add_argument(
+        "--relay-server",
+        default="",
+        help="ретранслятор; пусто — его выбирает hbbs (несколько ретрансляторов из админки)",
+    )
     parser.add_argument("--api-server", default="https://remit.su")
     parser.add_argument(
         "--support-url",

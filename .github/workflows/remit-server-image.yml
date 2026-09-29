@@ -1,0 +1,107 @@
+name: RemIT — образ сервера (hbbs и hbbr)
+
+# Собирает hbbs и hbbr из lejianwen/rustdesk-server (ветка forapi) с патчами
+# RemIT из remit/server-patches и публикует образ в GitHub Container Registry:
+#   ghcr.io/anathom1a/rustdesk-server-s6-remit:latest
+# Сборка идёт здесь, в публичном форке: у закрытого репозитория сайта нет
+# бесплатных минут Actions. В образе нет секретов — только открытый код.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [remit]
+    paths:
+      - .github/workflows/remit-server-image.yml
+      - remit/server-patches/**
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_REPO: rustdesk-server-s6-remit
+
+jobs:
+  build:
+    name: linux/amd64
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Имя образа
+        run: |
+          owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          echo "IMAGE_NAME=ghcr.io/${owner}/${IMAGE_REPO}" >> "$GITHUB_ENV"
+
+      - name: Патчи RemIT
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: remit/server-patches
+          path: fork
+
+      - name: rustdesk-server (ветка forapi)
+        uses: actions/checkout@v4
+        with:
+          repository: lejianwen/rustdesk-server
+          ref: forapi
+          submodules: recursive
+          path: rustdesk-server
+
+      - name: Применить патчи
+        run: |
+          P=fork/remit/server-patches
+          python3 "$P/hbbs-quota-hook.py" rustdesk-server/src/rendezvous_server.rs
+          python3 "$P/server-cmd-hook.py" rustdesk-server/src
+          python3 "$P/relay-geo-hook.py" rustdesk-server/src/rendezvous_server.rs
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rustdesk-server
+          key: ${{ hashFiles('fork/remit/server-patches/*.py') }}
+
+      - name: Собрать hbbs, hbbr и rustdesk-utils
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          cargo build --manifest-path rustdesk-server/Cargo.toml \
+            --release --all-features --target=x86_64-unknown-linux-musl
+
+      - name: Разложить бинарники
+        run: |
+          for bin in hbbs hbbr rustdesk-utils; do
+            install -m 0755 "rustdesk-server/target/x86_64-unknown-linux-musl/release/${bin}" \
+              "rustdesk-server/docker/rootfs/usr/bin/${bin}"
+          done
+
+      - name: Образ без панели rustdesk-api
+        run: |
+          DOCKERFILE=rustdesk-server/docker/Dockerfile
+          { printf 'FROM alpine:3.20\nRUN apk add --no-cache tzdata tar xz\n'; tail -n +2 "$DOCKERFILE"; } > "$DOCKERFILE.remit"
+          mv "$DOCKERFILE.remit" "$DOCKERFILE"
+          rm -rf rustdesk-server/docker/rootfs/etc/s6-overlay/s6-rc.d/api \
+                 rustdesk-server/docker/rootfs/etc/s6-overlay/s6-rc.d/user/contents.d/api
+
+      - name: Собрать образ
+        run: |
+          docker build --build-arg S6_ARCH=x86_64 \
+            --label "org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+            --label "org.opencontainers.image.licenses=AGPL-3.0" \
+            -t "${IMAGE_NAME}:latest" -t "${IMAGE_NAME}:${GITHUB_SHA}" \
+            rustdesk-server/docker
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Опубликовать
+        run: |
+          docker push "${IMAGE_NAME}:latest"
+          docker push "${IMAGE_NAME}:${GITHUB_SHA}"
+          {
+            echo "## Образ сервера RemIT"
+            echo "\`${IMAGE_NAME}:latest\` (и \`:${GITHUB_SHA}\`)"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -31,7 +31,7 @@
      зовёт написать в поддержку.
 9. Поведение (подробно — client/README.md, «Что изменено в поведении»):
    - смена ID скрыта, блокировка ввода на удалённом компьютере выключена;
-   - автозапись сеансов, которую включает сервер по тарифу;
+   - запись сеансов только на тарифах от «Профи» (флаг от сервера);
    - мышь владельца компьютера важнее мыши подключившегося (Windows);
    - левая колонка главного окна прокручивается, окно установщика больше.
 
@@ -425,29 +425,34 @@ def patch_file(path: Path, pairs: list[tuple[str, str]], message: str) -> None:
     print(f"{message}: {path}")
 
 
-def enable_server_recording(io_loop: Path, video_service: Path) -> None:
-    """Автозапись сеансов, которую включает сервер (тарифы от «Профи»).
+def gate_recording_by_plan(root: Path) -> None:
+    """Запись сеансов — только на тарифах от «Профи».
 
-    Сервер в ответе heartbeat присылает remit-record-incoming и
-    remit-record-outgoing = Y устройствам на тарифе «Профи» и выше. Своих
-    галочек человек не лишается, но выключить запись, которую включил тариф,
-    ими нельзя. Запись входящих ведёт компьютер, к которому подключились,
-    исходящих — тот, с которого подключаются.
+    Сервер в ответе heartbeat присылает remit-record-allowed: Y на тарифе
+    «Профи» и выше, N ниже. На «Профи» и выше запись — по желанию, как у
+    апстрима (галочки автозаписи и кнопка «Запись» у подключившегося). Ниже —
+    запись запрещена: не включается ни автоматически, ни кнопкой, кнопка и
+    галочки скрыты. Проверка стоит в update_record_state — через него
+    проходит любая запись исходящего сеанса, — и в записи входящих.
     """
+    allowed_rs = 'config::Config::get_option("remit-record-allowed") != "N"'
+    allowed_dart = "bind.mainGetOptionSync(key: 'remit-record-allowed') != 'N'"
     patch_file(
-        io_loop,
+        root / "src" / "client" / "io_loop.rs",
         [
             (
-                "LocalConfig::get_bool_option(config::keys::OPTION_ALLOW_AUTO_RECORD_OUTGOING);",
-                "LocalConfig::get_bool_option(config::keys::OPTION_ALLOW_AUTO_RECORD_OUTGOING)\n"
-                "                    // RemIT: запись исходящих включает тариф (сервер присылает в heartbeat).\n"
-                "                    || config::Config::get_option(\"remit-record-outgoing\") == \"Y\";",
+                "        let permission = self.handler.lc.read().unwrap().record_permission;\n"
+                "        if !permission {\n",
+                "        let permission = self.handler.lc.read().unwrap().record_permission\n"
+                "            // RemIT: запись — только на тарифах от «Профи» (сервер присылает в heartbeat).\n"
+                f"            && {allowed_rs};\n"
+                "        if !permission {\n",
             )
         ],
-        "Автозапись исходящих по тарифу",
+        "Запись исходящих — по тарифу",
     )
     patch_file(
-        video_service,
+        root / "src" / "server" / "video_service.rs",
         [
             (
                 """    let record_incoming = config::option2bool(
@@ -458,11 +463,58 @@ def enable_server_recording(io_loop: Path, video_service: Path) -> None:
         "allow-auto-record-incoming",
         &Config::get_option("allow-auto-record-incoming"),
     )
-        // RemIT: запись входящих включает тариф (сервер присылает в heartbeat).
-        || Config::get_option("remit-record-incoming") == "Y";""",
+        // RemIT: запись — только на тарифах от «Профи» (сервер присылает в heartbeat).
+        && Config::get_option("remit-record-allowed") != "N";""",
             )
         ],
-        "Автозапись входящих по тарифу",
+        "Запись входящих — по тарифу",
+    )
+    patch_file(
+        root / "flutter" / "lib" / "common" / "widgets" / "toolbar.dart",
+        [
+            (
+                """      (ffi.recordingModel.start || (perms["recording"] != false))) {""",
+                """      (ffi.recordingModel.start ||
+          (perms["recording"] != false && """ + allowed_dart + """))) {""",
+            )
+        ],
+        "Кнопка записи (телефон) — по тарифу",
+    )
+    patch_file(
+        root / "flutter" / "lib" / "desktop" / "widgets" / "remote_toolbar.dart",
+        [
+            (
+                """        (recordingModel.start || ffi.permissions['recording'] != false);""",
+                """        (recordingModel.start ||
+            (ffi.permissions['recording'] != false && """ + allowed_dart + """));""",
+            )
+        ],
+        "Кнопка записи — по тарифу",
+    )
+    patch_file(
+        root / "flutter" / "lib" / "desktop" / "pages" / "desktop_setting_page.dart",
+        [
+            (
+                """      return _Card(title: 'Recording', children: [
+        if (!bind.isOutgoingOnly())
+          _OptionCheckBox(context, 'Automatically record incoming sessions',
+              kOptionAllowAutoRecordIncoming),
+        if (!bind.isIncomingOnly())
+          _OptionCheckBox(context, 'Automatically record outgoing sessions',""",
+                """      // RemIT: запись — только на тарифах от «Профи».
+      final remitRecordAllowed = """ + allowed_dart + """;
+      return _Card(title: 'Recording', children: [
+        if (!remitRecordAllowed)
+          Text('Запись сеансов доступна на тарифах от «Профи»')
+              .marginOnly(left: _kContentHMargin, bottom: 6),
+        if (remitRecordAllowed && !bind.isOutgoingOnly())
+          _OptionCheckBox(context, 'Automatically record incoming sessions',
+              kOptionAllowAutoRecordIncoming),
+        if (remitRecordAllowed && !bind.isIncomingOnly())
+          _OptionCheckBox(context, 'Automatically record outgoing sessions',""",
+            )
+        ],
+        "Настройки записи — по тарифу",
     )
 
 
@@ -1461,10 +1513,8 @@ def main() -> int:
     if flutter_main.is_file():
         enlarge_install_page(flutter_main)
 
-    io_loop = args.root / "src" / "client" / "io_loop.rs"
-    video_service = args.root / "src" / "server" / "video_service.rs"
-    if io_loop.is_file() and video_service.is_file():
-        enable_server_recording(io_loop, video_service)
+    if (args.root / "src" / "client" / "io_loop.rs").is_file():
+        gate_recording_by_plan(args.root)
     input_service = args.root / "src" / "server" / "input_service.rs"
     if input_service.is_file():
         local_mouse_priority(input_service)

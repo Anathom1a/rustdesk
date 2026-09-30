@@ -31,7 +31,8 @@
      зовёт написать в поддержку.
 9. Поведение (подробно — client/README.md, «Что изменено в поведении»):
    - смена ID скрыта, блокировка ввода на удалённом компьютере выключена;
-   - запись сеансов только на тарифах от «Профи» (флаг от сервера);
+   - запись сеансов только на тарифах от «Профи», голосовой звонок — не на
+     бесплатном (флаги от сервера);
    - мышь владельца компьютера важнее мыши подключившегося (Windows);
    - левая колонка главного окна прокручивается, окно установщика больше.
 
@@ -515,6 +516,51 @@ def gate_recording_by_plan(root: Path) -> None:
             )
         ],
         "Настройки записи — по тарифу",
+    )
+
+
+def gate_voice_call_by_plan(root: Path) -> None:
+    """Голосовой звонок — не на бесплатном тарифе.
+
+    Сервер присылает remit-voice-allowed: N на бесплатном тарифе. Звонок
+    начинает тот, кто подключился, — проверка стоит в request_voice_call,
+    через него идут и компьютер, и телефон: вместо звонка — сообщение. На
+    компьютере пункт «Голосовой звонок» из меню чата убран.
+    """
+    patch_file(
+        root / "src" / "ui_session_interface.rs",
+        [
+            (
+                "    pub fn request_voice_call(&self) {\n",
+                "    pub fn request_voice_call(&self) {\n"
+                "        // RemIT: голосовой звонок — на платных тарифах (сервер присылает в heartbeat).\n"
+                "        if hbb_common::config::Config::get_option(\"remit-voice-allowed\") == \"N\" {\n"
+                "            self.msgbox(\n"
+                "                \"info\",\n"
+                "                \"Голосовой звонок\",\n"
+                "                \"Голосовой звонок доступен на платных тарифах.\",\n"
+                "                \"\",\n"
+                "            );\n"
+                "            return;\n"
+                "        }\n",
+            )
+        ],
+        "Голосовой звонок — по тарифу",
+    )
+    patch_file(
+        root / "flutter" / "lib" / "desktop" / "widgets" / "remote_toolbar.dart",
+        [
+            (
+                "          menuChildrenGetter: (_) => [textChat(), voiceCall()]);",
+                "          menuChildrenGetter: (_) => [\n"
+                "                textChat(),\n"
+                "                // RemIT: голосовой звонок — на платных тарифах.\n"
+                "                if (bind.mainGetOptionSync(key: 'remit-voice-allowed') != 'N')\n"
+                "                  voiceCall(),\n"
+                "              ]);",
+            )
+        ],
+        "Пункт «Голосовой звонок» — по тарифу",
     )
 
 
@@ -1515,6 +1561,8 @@ def main() -> int:
 
     if (args.root / "src" / "client" / "io_loop.rs").is_file():
         gate_recording_by_plan(args.root)
+    if (args.root / "src" / "ui_session_interface.rs").is_file():
+        gate_voice_call_by_plan(args.root)
     input_service = args.root / "src" / "server" / "input_service.rs"
     if input_service.is_file():
         local_mouse_priority(input_service)

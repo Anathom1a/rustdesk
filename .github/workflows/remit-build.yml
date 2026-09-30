@@ -56,6 +56,9 @@ env:
   VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
   VERSION: "1.4.9"
+  # Номер сборки: клиент показывает версию как 1.4.9.<номер> и по нему
+  # узнаёт о пересборках (выпуск на сайте публикуется с этим же номером).
+  REMIT_BUILD: "${{ github.run_number }}"
   TAG_NAME: "${{ inputs.upload_tag || 'remit' }}"
   UPLOAD_ARTIFACT: "true"
   # Тестовая сборка — «посмотреть, как выглядит», пока нет ключа сервера.
@@ -823,6 +826,7 @@ jobs:
           dockerRunArgs: |
             --volume "${PWD}:/workspace"
             --volume "/opt/artifacts:/opt/artifacts"
+            --env "REMIT_BUILD=${{ env.REMIT_BUILD }}"
           shell: /bin/bash
           install: |
             apt-get update -y

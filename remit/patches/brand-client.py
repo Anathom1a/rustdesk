@@ -628,6 +628,89 @@ fn remit_inventory(out: &mut serde_json::Value) {
 """
 
 
+BUILD_NUMBER_FN = """
+/// RemIT: номер сборки — номер запуска сборки в GitHub Actions (REMIT_BUILD).
+/// Версия RustDesk у пересборок одна и та же, поэтому без номера клиент не
+/// узнал бы о новой сборке. Локальные сборки — номер 0.
+pub fn remit_build() -> i64 {
+    option_env!("REMIT_BUILD")
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .unwrap_or(0)
+}
+
+/// «1.4.9.12» — версия RustDesk и номер сборки; без номера — просто версия.
+pub fn remit_version() -> String {
+    match remit_build() {
+        0 => crate::VERSION.to_owned(),
+        build => format!("{}.{}", crate::VERSION, build),
+    }
+}
+
+/// Версия выпуска с сайта для сравнения: сначала версия RustDesk, потом номер
+/// сборки (четвёртая часть). «1.4.9» — сборка 0.
+fn remit_version_key(value: &str) -> (i64, i64) {
+    let parts: Vec<&str> = value.split('.').collect();
+    if parts.len() > 3 {
+        (
+            get_version_number(&parts[..3].join(".")),
+            parts[3].trim().parse::<i64>().unwrap_or(0),
+        )
+    } else {
+        (get_version_number(value), 0)
+    }
+}
+
+"""
+
+
+def add_build_number(root: Path) -> None:
+    """Номер сборки в версии клиента (см. BUILD_NUMBER_FN).
+
+    Проверка обновлений сравнивает и версию RustDesk, и номер сборки, так что
+    выпуск «1.4.9.12» на сайте предлагается всем, у кого сборка старше. Номер
+    уходит на сайт вместе со сведениями о системе и виден в «О программе»;
+    протокольная версия (crate::VERSION) не меняется — от неё зависит
+    совместимость с другими клиентами.
+    """
+    check_anchor = (
+        "// No need to check `danger_accept_invalid_cert` for now.\n"
+        "// Because the url is always `https://api.rustdesk.com/version/latest`.\n"
+        '#[tokio::main(flavor = "current_thread")]\n'
+        "pub async fn do_check_software_update()"
+    )
+    patch_file(
+        root / "src" / "common.rs",
+        [
+            (check_anchor, BUILD_NUMBER_FN.lstrip("\n") + check_anchor),
+            (
+                "    if get_version_number(&latest_release_version) > get_version_number(crate::VERSION) {",
+                "    if remit_version_key(&latest_release_version) > (get_version_number(crate::VERSION), remit_build()) {",
+            ),
+        ],
+        "Номер сборки в проверке обновлений",
+    )
+    patch_file(
+        root / "src" / "hbbs_http" / "sync.rs",
+        [
+            (
+                '                    v["version"] = json!(crate::VERSION);',
+                '                    v["version"] = json!(crate::common::remit_version());',
+            )
+        ],
+        "Номер сборки в сведениях о системе",
+    )
+    patch_file(
+        root / "src" / "ui_interface.rs",
+        [
+            (
+                "pub fn get_version() -> String {\n    crate::VERSION.to_owned()\n}",
+                "pub fn get_version() -> String {\n    crate::common::remit_version()\n}",
+            )
+        ],
+        "Номер сборки в окне «О программе»",
+    )
+
+
 def add_inventory(path: Path) -> None:
     """Инвентаризация: к сведениям о системе добавляются диски, время работы,
     производитель и модель (см. INVENTORY_FN). Сайт показывает их в разделе
@@ -1657,6 +1740,8 @@ def main() -> int:
         gate_voice_call_by_plan(args.root)
     if (args.root / "src" / "common.rs").is_file():
         add_inventory(args.root / "src" / "common.rs")
+    if (args.root / "src" / "hbbs_http" / "sync.rs").is_file():
+        add_build_number(args.root)
     input_service = args.root / "src" / "server" / "input_service.rs"
     if input_service.is_file():
         local_mouse_priority(input_service)

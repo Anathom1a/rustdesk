@@ -34,7 +34,9 @@
    - запись сеансов только на тарифах от «Профи», голосовой звонок — не на
      бесплатном (флаги от сервера);
    - мышь владельца компьютера важнее мыши подключившегося (Windows);
-   - левая колонка главного окна прокручивается, окно установщика больше.
+   - левая колонка главного окна прокручивается, окно установщика больше;
+   - сведения о системе дополнены для инвентаризации: диски, время работы,
+     производитель и модель.
 
 Использование:
     python3 brand-client.py /path/to/rustdesk \
@@ -561,6 +563,96 @@ def gate_voice_call_by_plan(root: Path) -> None:
             )
         ],
         "Пункт «Голосовой звонок» — по тарифу",
+    )
+
+
+INVENTORY_FN = r"""
+// RemIT: сведения для инвентаризации парка — диски, время работы,
+// производитель и модель компьютера. Уходят вместе с остальными сведениями
+// о системе (/api/sysinfo); сервер просит обновлять их раз в 12 часов.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn remit_inventory(out: &mut serde_json::Value) {
+    use hbb_common::sysinfo::{Disks, System};
+    const SKIP_FS: [&str; 6] = ["squashfs", "overlay", "tmpfs", "devtmpfs", "autofs", "nullfs"];
+    let disks: Vec<serde_json::Value> = Disks::new_with_refreshed_list()
+        .list()
+        .iter()
+        .filter(|disk| disk.total_space() > 0)
+        .filter(|disk| {
+            let fs = disk.file_system().to_string_lossy().to_lowercase();
+            let mount = disk.mount_point().to_string_lossy().to_string();
+            !SKIP_FS.contains(&fs.as_str())
+                && !mount.starts_with("/snap/")
+                && !mount.starts_with("/System/Volumes/")
+                && !mount.starts_with("/private/var/vm")
+        })
+        .take(32)
+        .map(|disk| {
+            json!({
+                "mount": disk.mount_point().to_string_lossy(),
+                "name": disk.name().to_string_lossy(),
+                "fs": disk.file_system().to_string_lossy(),
+                "total": disk.total_space(),
+                "free": disk.available_space(),
+                "removable": disk.is_removable(),
+            })
+        })
+        .collect();
+    out["disks"] = json!(disks);
+    let system = System::new();
+    out["uptime"] = json!(system.uptime());
+    out["boot_time"] = json!(system.boot_time());
+    #[cfg(windows)]
+    {
+        use winreg::{enums::HKEY_LOCAL_MACHINE, RegKey};
+        if let Ok(key) = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey("HARDWARE\\DESCRIPTION\\System\\BIOS") {
+            let value = |name: &str| key.get_value::<String, _>(name).unwrap_or_default().trim().to_owned();
+            out["manufacturer"] = json!(value("SystemManufacturer"));
+            out["model"] = json!(value("SystemProductName"));
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let read = |path: &str| std::fs::read_to_string(path).map(|s| s.trim().to_owned()).unwrap_or_default();
+        out["manufacturer"] = json!(read("/sys/class/dmi/id/sys_vendor"));
+        out["model"] = json!(read("/sys/class/dmi/id/product_name"));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(output) = std::process::Command::new("sysctl").args(["-n", "hw.model"]).output() {
+            out["manufacturer"] = json!("Apple");
+            out["model"] = json!(String::from_utf8_lossy(&output.stdout).trim());
+        }
+    }
+}
+"""
+
+
+def add_inventory(path: Path) -> None:
+    """Инвентаризация: к сведениям о системе добавляются диски, время работы,
+    производитель и модель (см. INVENTORY_FN). Сайт показывает их в разделе
+    «Инвентаризация» кабинета."""
+    anchor = (
+        '            out["username"] = json!(username);\n'
+        "        }\n"
+        "    }\n"
+        "    out\n"
+        "}\n"
+    )
+    patch_file(
+        path,
+        [
+            (
+                anchor,
+                '            out["username"] = json!(username);\n'
+                "        }\n"
+                "        remit_inventory(&mut out);\n"
+                "    }\n"
+                "    out\n"
+                "}\n" + INVENTORY_FN,
+            )
+        ],
+        "Инвентаризация в сведениях о системе",
     )
 
 
@@ -1563,6 +1655,8 @@ def main() -> int:
         gate_recording_by_plan(args.root)
     if (args.root / "src" / "ui_session_interface.rs").is_file():
         gate_voice_call_by_plan(args.root)
+    if (args.root / "src" / "common.rs").is_file():
+        add_inventory(args.root / "src" / "common.rs")
     input_service = args.root / "src" / "server" / "input_service.rs"
     if input_service.is_file():
         local_mouse_priority(input_service)

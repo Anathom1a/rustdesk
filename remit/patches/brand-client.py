@@ -29,6 +29,11 @@
      «About RustDesk» просто выключило бы перевод.
    - подпись под главным окном (powered_by_me) вместо «Основано на RustDesk»
      зовёт написать в поддержку.
+9. Поведение (подробно — client/README.md, «Что изменено в поведении»):
+   - смена ID скрыта, блокировка ввода на удалённом компьютере выключена;
+   - автозапись сеансов, которую включает сервер по тарифу;
+   - мышь владельца компьютера важнее мыши подключившегося (Windows);
+   - левая колонка главного окна прокручивается, окно установщика больше.
 
 Использование:
     python3 brand-client.py /path/to/rustdesk \
@@ -142,6 +147,10 @@ def lock_servers(path: Path, args: argparse.Namespace) -> None:
     ретранслятор через настройки, ключ командной строки --config или ручную
     правку конфига нельзя.
 
+    Там же: блокировка ввода на удалённом компьютере выключена для всех
+    (enable-block-input=N — у подключившегося пропадает и кнопка), а смена ID
+    убрана из интерфейса (disable-change-id): ID выдаёт сервер.
+
     Ретранслятор по умолчанию закреплён пустым: тогда клиент берёт тот, что
     назначил hbbs (rendezvous_mediator.rs, get_relay_server), а hbbs
     распределяет соединения по ретрансляторам из админки сайта и сам
@@ -161,6 +170,9 @@ def lock_servers(path: Path, args: argparse.Namespace) -> None:
                 f'            ("relay-server".to_owned(), "{args.relay_server}".to_owned()),\n'
                 f'            ("api-server".to_owned(), "{args.api_server}".to_owned()),\n'
                 f'            ("key".to_owned(), "{args.public_key}".to_owned()),\n'
+                # Блокировка ввода на удалённом компьютере выключена для всех:
+                # владелец ПК всегда может перехватить мышь и клавиатуру.
+                '            ("enable-block-input".to_owned(), "N".to_owned()),\n'
                 "        ]));"
             ),
         ),
@@ -171,6 +183,8 @@ def lock_servers(path: Path, args: argparse.Namespace) -> None:
                 "pub static ref BUILTIN_SETTINGS: RwLock<HashMap<String, String>> = "
                 "RwLock::new(HashMap::from([\n"
                 '            ("hide-server-settings".to_owned(), "Y".to_owned()),\n'
+                # ID выдаёт сервер и по нему считается тариф — менять его нельзя.
+                '            ("disable-change-id".to_owned(), "Y".to_owned()),\n'
                 "        ]));"
             ),
         ),
@@ -393,6 +407,223 @@ def widen_main_window(path: Path) -> None:
     )
     path.write_text(source, encoding="utf-8")
     print(f"Стартовое окно увеличено до 920x720 в {path}")
+
+
+def patch_file(path: Path, pairs: list[tuple[str, str]], message: str) -> None:
+    """Точечные замены: каждая строка-якорь должна встретиться ровно один раз."""
+    source = path.read_text(encoding="utf-8")
+    for old, new in pairs:
+        if new in source:
+            continue
+        if source.count(old) != 1:
+            raise SystemExit(
+                f"{path}: ожидалось одно вхождение фрагмента, найдено {source.count(old)}. "
+                "Исходники RustDesk изменились — обновите скрипт.\n" + old
+            )
+        source = source.replace(old, new, 1)
+    path.write_text(source, encoding="utf-8")
+    print(f"{message}: {path}")
+
+
+def enable_server_recording(io_loop: Path, video_service: Path) -> None:
+    """Автозапись сеансов, которую включает сервер (тарифы от «Профи»).
+
+    Сервер в ответе heartbeat присылает remit-record-incoming и
+    remit-record-outgoing = Y устройствам на тарифе «Профи» и выше. Своих
+    галочек человек не лишается, но выключить запись, которую включил тариф,
+    ими нельзя. Запись входящих ведёт компьютер, к которому подключились,
+    исходящих — тот, с которого подключаются.
+    """
+    patch_file(
+        io_loop,
+        [
+            (
+                "LocalConfig::get_bool_option(config::keys::OPTION_ALLOW_AUTO_RECORD_OUTGOING);",
+                "LocalConfig::get_bool_option(config::keys::OPTION_ALLOW_AUTO_RECORD_OUTGOING)\n"
+                "                    // RemIT: запись исходящих включает тариф (сервер присылает в heartbeat).\n"
+                "                    || config::Config::get_option(\"remit-record-outgoing\") == \"Y\";",
+            )
+        ],
+        "Автозапись исходящих по тарифу",
+    )
+    patch_file(
+        video_service,
+        [
+            (
+                """    let record_incoming = config::option2bool(
+        "allow-auto-record-incoming",
+        &Config::get_option("allow-auto-record-incoming"),
+    );""",
+                """    let record_incoming = config::option2bool(
+        "allow-auto-record-incoming",
+        &Config::get_option("allow-auto-record-incoming"),
+    )
+        // RemIT: запись входящих включает тариф (сервер присылает в heartbeat).
+        || Config::get_option("remit-record-incoming") == "Y";""",
+            )
+        ],
+        "Автозапись входящих по тарифу",
+    )
+
+
+LOCAL_MOUSE_MODULE = """
+// RemIT: приоритет мыши у владельца компьютера (Windows).
+//
+// Низкоуровневый хук видит каждое событие мыши и флаг LLMHF_INJECTED:
+// движения и нажатия, которые делает человек за этим компьютером, приходят
+// без него, а ввод подключившегося (SendInput) — с ним. Пока владелец
+// двигает мышью и ещё секунду после, мышь подключившегося не действует.
+// Проверка — одно атомарное чтение, без ожиданий на каждом событии.
+#[cfg(windows)]
+mod remit_local_mouse {
+    use hbb_common::{lazy_static, log};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::time::Instant;
+    use winapi::shared::minwindef::{LPARAM, LRESULT, WPARAM};
+    use winapi::um::libloaderapi::GetModuleHandleW;
+    use winapi::um::winuser::{
+        CallNextHookEx, GetMessageW, SetWindowsHookExW, LLMHF_INJECTED, LLMHF_LOWER_IL_INJECTED, MSG,
+        MSLLHOOKSTRUCT, WH_MOUSE_LL,
+    };
+
+    lazy_static::lazy_static! {
+        static ref STARTED_AT: Instant = Instant::now();
+    }
+    static LAST_LOCAL_MS: AtomicU64 = AtomicU64::new(0);
+    static HOOKED: AtomicBool = AtomicBool::new(false);
+
+    fn now_ms() -> u64 {
+        STARTED_AT.elapsed().as_millis() as u64 + 1
+    }
+
+    unsafe extern "system" fn hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        if code >= 0 && lparam != 0 {
+            let info = &*(lparam as *const MSLLHOOKSTRUCT);
+            if info.flags & (LLMHF_INJECTED | LLMHF_LOWER_IL_INJECTED) == 0 {
+                LAST_LOCAL_MS.store(now_ms(), Ordering::Relaxed);
+            }
+        }
+        CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
+    }
+
+    /// Ставит хук один раз, в отдельном потоке со своим циклом сообщений.
+    pub fn ensure_started() {
+        if HOOKED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        lazy_static::initialize(&STARTED_AT);
+        std::thread::spawn(|| unsafe {
+            let hook_handle = SetWindowsHookExW(WH_MOUSE_LL, Some(hook), GetModuleHandleW(std::ptr::null()), 0);
+            if hook_handle.is_null() {
+                log::warn!("RemIT: не удалось поставить хук мыши, приоритет владельца выключен");
+                return;
+            }
+            let mut msg: MSG = std::mem::zeroed();
+            while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {}
+        });
+    }
+
+    /// Владелец двигал мышью или нажимал кнопки меньше window_ms назад.
+    pub fn owner_active(window_ms: u64) -> bool {
+        let last = LAST_LOCAL_MS.load(Ordering::Relaxed);
+        last != 0 && now_ms().saturating_sub(last) < window_ms
+    }
+}
+"""
+
+
+def local_mouse_priority(path: Path) -> None:
+    """Мышь владельца компьютера важнее мыши подключившегося (Windows).
+
+    У апстрима проверка есть, но выключена: она сравнивала положение курсора
+    с ожиданием и опросами и тормозила ввод. Здесь признак берётся из
+    низкоуровневого хука (см. LOCAL_MOUSE_MODULE). Отпускание кнопки
+    подключившегося проходит всегда — иначе у него «залипло» бы
+    перетаскивание.
+    """
+    patch_file(
+        path,
+        [
+            (
+                "fn active_mouse_(_conn: i32) -> bool {\n    true\n",
+                LOCAL_MOUSE_MODULE
+                + "\nfn active_mouse_(_conn: i32) -> bool {\n"
+                "    // RemIT: пока владелец компьютера работает мышью, ввод подключившегося не действует.\n"
+                "    #[cfg(windows)]\n"
+                "    {\n"
+                "        remit_local_mouse::ensure_started();\n"
+                "        if remit_local_mouse::owner_active(MOUSE_MOVE_PROTECTION_TIMEOUT.as_millis() as u64) {\n"
+                "            return false;\n"
+                "        }\n"
+                "    }\n"
+                "    true\n",
+            ),
+            (
+                "pub fn handle_mouse_simulation_(evt: &MouseEvent, conn: i32) {\n    if !active_mouse_(conn) {",
+                "pub fn handle_mouse_simulation_(evt: &MouseEvent, conn: i32) {\n"
+                "    // RemIT: отпускание кнопки пропускаем всегда, чтобы не залипало перетаскивание.\n"
+                "    if (evt.mask & MOUSE_TYPE_MASK) != MOUSE_TYPE_UP && !active_mouse_(conn) {",
+            ),
+        ],
+        "Приоритет мыши владельца",
+    )
+
+
+def fix_left_pane(path: Path) -> None:
+    """Левая колонка главного окна прокручивается, если не влезает.
+
+    У апстрима SingleChildScrollView стоит в Column без ограничения высоты:
+    прокрутки нет, и всё, что ниже края окна, — в том числе карточка с
+    кнопкой «Установить» — просто обрезается. Flexible даёт ей высоту окна.
+    """
+    patch_file(
+        path,
+        [
+            (
+                """            Column(
+              children: [
+                SingleChildScrollView(
+                  controller: _leftPaneScrollController,
+                  child: Column(
+                    key: _childKey,
+                    children: children,
+                  ),
+                ),
+                Expanded(child: Container())
+              ],
+            ),""",
+                """            Column(
+              children: [
+                // RemIT: колонка прокручивается, а не обрезается по краю окна.
+                Flexible(
+                  child: SingleChildScrollView(
+                    controller: _leftPaneScrollController,
+                    child: Column(
+                      key: _childKey,
+                      children: children,
+                    ),
+                  ),
+                ),
+              ],
+            ),""",
+            )
+        ],
+        "Левая колонка прокручивается",
+    )
+
+
+def enlarge_install_page(path: Path) -> None:
+    """Окно установщика — как главное, 920x720: кнопки внизу видны сразу."""
+    patch_file(
+        path,
+        [
+            (
+                "getHiddenTitleBarWindowOptions(size: Size(800, 600), center: true);",
+                "getHiddenTitleBarWindowOptions(size: Size(920, 720), center: true);",
+            )
+        ],
+        "Окно установщика увеличено",
+    )
 
 
 def brand_portable_folder(path: Path, app_name: str) -> None:
@@ -927,10 +1158,12 @@ STATUS_IMPORT_ANCHOR = "import 'package:flutter_hbb/models/state_model.dart';"
 STATUS_IMPORT = "import 'package:flutter_hbb/remit_status.dart';"
 
 # Куда встраивать карточку: экран компьютера и экран телефона.
+# Карточка на компьютере — после карточек подсказок: «Установить» (пока
+# клиент не установлен) должна быть видна сразу под паролем.
 STATUS_TARGETS = [
     (
         Path("flutter/lib/desktop/pages/desktop_home_page.dart"),
-        "      if (!isOutgoingOnly) buildPasswordBoard(context),",
+        "      buildPluginEntry(),",
         "      const RemITStatusCard(),",
     ),
     (
@@ -1056,7 +1289,11 @@ def install_status_card(path: Path, widget_anchor: str, widget_line: str) -> Non
         backup.write_text(source, encoding="utf-8")
 
     source = source.replace(STATUS_IMPORT_ANCHOR, f"{STATUS_IMPORT_ANCHOR}\n{STATUS_IMPORT}", 1)
-    source = source.replace(widget_anchor, f"{widget_anchor}\n{widget_line}", 1)
+    # На компьютере карточка встаёт перед якорем, на телефоне — после.
+    if widget_anchor.strip() == "buildPluginEntry(),":
+        source = source.replace(widget_anchor, f"{widget_line}\n{widget_anchor}", 1)
+    else:
+        source = source.replace(widget_anchor, f"{widget_anchor}\n{widget_line}", 1)
     path.write_text(source, encoding="utf-8")
     print(f"Карточка тарифа встроена в {path}")
 
@@ -1217,6 +1454,20 @@ def main() -> int:
     runner_main = args.root / "flutter" / "windows" / "runner" / "main.cpp"
     if runner_main.is_file():
         widen_main_window(runner_main)
+
+    if home_page.is_file():
+        fix_left_pane(home_page)
+    flutter_main = args.root / "flutter" / "lib" / "main.dart"
+    if flutter_main.is_file():
+        enlarge_install_page(flutter_main)
+
+    io_loop = args.root / "src" / "client" / "io_loop.rs"
+    video_service = args.root / "src" / "server" / "video_service.rs"
+    if io_loop.is_file() and video_service.is_file():
+        enable_server_recording(io_loop, video_service)
+    input_service = args.root / "src" / "server" / "input_service.rs"
+    if input_service.is_file():
+        local_mouse_priority(input_service)
 
     portable_main = args.root / "libs" / "portable" / "src" / "main.rs"
     if portable_main.is_file():

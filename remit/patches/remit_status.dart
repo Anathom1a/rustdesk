@@ -4,7 +4,8 @@
 // сайта вместо __SITE_URL__ и вставляет карточку на главный экран.
 //
 // Карточка показывает остаток бесплатного времени на сегодня либо срок
-// действия подписки. Данные берутся с нашего сервера раз в минуту; если связи
+// действия подписки. На компьютерах под управлением (модуль «Управление»)
+// в ней же кнопка «Позвать ИТ» — заявка уходит тем, кто обслуживает компьютер. Данные берутся с нашего сервера раз в минуту; если связи
 // нет, карточка просто не показывается.
 
 import 'dart:async';
@@ -29,6 +30,7 @@ class RemITStatus {
     required this.limitSeconds,
     required this.linkUrl,
     required this.linkText,
+    required this.helpDesk,
   });
 
   final String message;
@@ -41,6 +43,8 @@ class RemITStatus {
   final int? limitSeconds;
   final String linkUrl;
   final String linkText;
+  // Компьютер под управлением: в карточке есть кнопка «Позвать ИТ».
+  final bool helpDesk;
 }
 
 class RemITStatusCard extends StatefulWidget {
@@ -112,6 +116,7 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
         linkText: serverLinkText.isNotEmpty
             ? serverLinkText
             : (exhausted ? 'Посмотреть тарифы' : 'Личный кабинет'),
+        helpDesk: data['helpDesk'] == true,
       );
 
       if (mounted) {
@@ -119,6 +124,95 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
       }
     } catch (_) {
       // Сайт недоступен — показывать нечего, работу клиента это не трогает.
+    }
+  }
+
+  /// «Позвать ИТ»: сотрудник описывает проблему, заявка уходит в кабинет
+  /// и на почту тем, кто обслуживает этот компьютер.
+  Future<void> _callIt() async {
+    final controller = TextEditingController();
+    String? result;
+    bool sending = false;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Позвать ИТ'),
+          content: SizedBox(
+            width: 380,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Опишите, что случилось. Специалист увидит сведения о компьютере и подключится.'),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: controller,
+                  autofocus: true,
+                  minLines: 3,
+                  maxLines: 6,
+                  maxLength: 1000,
+                  decoration: const InputDecoration(hintText: 'Например: не печатает принтер в бухгалтерии'),
+                ),
+                if (result != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(result!),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Закрыть'),
+            ),
+            ElevatedButton(
+              onPressed: sending
+                  ? null
+                  : () async {
+                      final text = controller.text.trim();
+                      if (text.isEmpty) {
+                        setDialogState(() => result = 'Опишите, что случилось.');
+                        return;
+                      }
+                      setDialogState(() => sending = true);
+                      final answer = await _sendHelp(text);
+                      setDialogState(() {
+                        sending = false;
+                        result = answer.$2;
+                        if (answer.$1) controller.clear();
+                      });
+                    },
+              child: Text(sending ? 'Отправляем…' : 'Отправить'),
+            ),
+          ],
+        ),
+      ),
+    );
+    controller.dispose();
+  }
+
+  Future<(bool, String)> _sendHelp(String message) async {
+    try {
+      final apiServer = await bind.mainGetApiServer();
+      final base = apiServer.isNotEmpty ? apiServer : kRemITSite;
+      final id = await bind.mainGetMyId();
+      final uuid = await bind.mainGetUuid();
+      final response = await http
+          .post(
+            Uri.parse('$base/api/v1/client/help'),
+            headers: const {'Content-Type': 'application/json'},
+            body: jsonEncode({'id': id, 'uuid': uuid, 'message': message}),
+          )
+          .timeout(_kRequestTimeout);
+      final data = jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+      if (response.statusCode == 200) {
+        return (true, (data['message'] ?? 'Заявка отправлена.').toString());
+      }
+      return (false, (data['error'] ?? 'Не удалось отправить заявку.').toString());
+    } catch (_) {
+      return (false, 'Нет связи с сервером. Попробуйте ещё раз.');
     }
   }
 
@@ -190,6 +284,15 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
               ),
             ),
           ),
+          if (status.helpDesk)
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: OutlinedButton.icon(
+                onPressed: _callIt,
+                icon: const Icon(Icons.support_agent, size: 18),
+                label: const Text('Позвать ИТ'),
+              ),
+            ),
         ],
       ),
     );

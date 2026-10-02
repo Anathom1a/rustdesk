@@ -5,8 +5,10 @@
 //
 // Карточка показывает остаток бесплатного времени на сегодня либо срок
 // действия подписки. На компьютерах под управлением (модуль «Управление»)
-// в ней же кнопка «Позвать ИТ» — заявка уходит тем, кто обслуживает компьютер. Данные берутся с нашего сервера раз в минуту; если связи
-// нет, карточка просто не показывается.
+// в ней же кнопка «Позвать ИТ» — заявка уходит тем, кто обслуживает компьютер.
+// Если компьютер ещё никто не обслуживает, в карточке есть «Код от мастера»:
+// клиент вводит код, и компьютер попадает под обслуживание. Данные берутся с
+// нашего сервера раз в минуту; если связи нет, карточка просто не показывается.
 
 import 'dart:async';
 import 'dart:convert';
@@ -31,6 +33,8 @@ class RemITStatus {
     required this.linkUrl,
     required this.linkText,
     required this.helpDesk,
+    required this.helpDeskProvider,
+    required this.joinCode,
   });
 
   final String message;
@@ -45,7 +49,14 @@ class RemITStatus {
   final String linkText;
   // Компьютер под управлением: в карточке есть кнопка «Позвать ИТ».
   final bool helpDesk;
+  // Кто обслуживает компьютер (название фирмы мастера).
+  final String helpDeskProvider;
+  // Можно ввести код от мастера.
+  final bool joinCode;
 }
+
+// Заявку из одного слова мастер не разберёт — просим описать подробнее.
+const int _kHelpMessageMin = 10;
 
 class RemITStatusCard extends StatefulWidget {
   const RemITStatusCard({Key? key}) : super(key: key);
@@ -117,6 +128,8 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
             ? serverLinkText
             : (exhausted ? 'Посмотреть тарифы' : 'Личный кабинет'),
         helpDesk: data['helpDesk'] == true,
+        helpDeskProvider: (data['helpDeskProvider'] ?? '').toString(),
+        joinCode: data['joinCode'] == true,
       );
 
       if (mounted) {
@@ -144,7 +157,9 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Опишите, что случилось. Специалист увидит сведения о компьютере и подключится.'),
+                Text(_status?.helpDeskProvider.isNotEmpty == true
+                    ? 'Опишите, что случилось. Заявка уйдёт в «${_status!.helpDeskProvider}» — специалист увидит сведения о компьютере и подключится.'
+                    : 'Опишите, что случилось. Специалист увидит сведения о компьютере и подключится.'),
                 const SizedBox(height: 12),
                 TextField(
                   controller: controller,
@@ -172,8 +187,8 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
                   ? null
                   : () async {
                       final text = controller.text.trim();
-                      if (text.isEmpty) {
-                        setDialogState(() => result = 'Опишите, что случилось.');
+                      if (text.replaceAll(RegExp(r'\s+'), ' ').length < _kHelpMessageMin) {
+                        setDialogState(() => result = 'Опишите, что случилось, хотя бы парой слов — так мастер быстрее поможет.');
                         return;
                       }
                       setDialogState(() => sending = true);
@@ -193,7 +208,82 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
     controller.dispose();
   }
 
+  /// «Код от мастера»: клиент вводит код, который мастер прислал ему
+  /// (например, в чат), — и компьютер попадает под обслуживание.
+  Future<void> _enterCode() async {
+    final controller = TextEditingController();
+    String? result;
+    bool sending = false;
+    bool done = false;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Код от мастера'),
+          content: SizedBox(
+            width: 380,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Введите код, который прислал ваш компьютерный мастер. После этого в программе появится кнопка «Позвать ИТ».'),
+                const SizedBox(height: 12),
+                if (!done)
+                  TextField(
+                    controller: controller,
+                    autofocus: true,
+                    textCapitalization: TextCapitalization.characters,
+                    maxLength: 12,
+                    decoration: const InputDecoration(hintText: 'Например: K7QM-4PZ2'),
+                  ),
+                if (result != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(result!),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(done ? 'Готово' : 'Закрыть'),
+            ),
+            if (!done)
+              ElevatedButton(
+                onPressed: sending
+                    ? null
+                    : () async {
+                        final code = controller.text.trim();
+                        if (code.replaceAll(RegExp(r'[^0-9A-Za-z]'), '').length != 8) {
+                          setDialogState(() => result = 'В коде 8 букв и цифр — проверьте его.');
+                          return;
+                        }
+                        setDialogState(() => sending = true);
+                        final answer = await _post('/api/v1/client/join', {'code': code});
+                        setDialogState(() {
+                          sending = false;
+                          done = answer.$1;
+                          result = answer.$2;
+                        });
+                        if (answer.$1) _load();
+                      },
+                child: Text(sending ? 'Проверяем…' : 'Подключить'),
+              ),
+          ],
+        ),
+      ),
+    );
+    controller.dispose();
+  }
+
   Future<(bool, String)> _sendHelp(String message) async {
+    final answer = await _post('/api/v1/client/help', {'message': message});
+    return (answer.$1, answer.$1 && answer.$2.isEmpty ? 'Заявка отправлена.' : answer.$2);
+  }
+
+  /// Запрос к сайту от имени этого компьютера (ID и uuid).
+  Future<(bool, String)> _post(String path, Map<String, String> fields) async {
     try {
       final apiServer = await bind.mainGetApiServer();
       final base = apiServer.isNotEmpty ? apiServer : kRemITSite;
@@ -201,16 +291,16 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
       final uuid = await bind.mainGetUuid();
       final response = await http
           .post(
-            Uri.parse('$base/api/v1/client/help'),
+            Uri.parse('$base$path'),
             headers: const {'Content-Type': 'application/json'},
-            body: jsonEncode({'id': id, 'uuid': uuid, 'message': message}),
+            body: jsonEncode({'id': id, 'uuid': uuid, ...fields}),
           )
           .timeout(_kRequestTimeout);
       final data = jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
       if (response.statusCode == 200) {
-        return (true, (data['message'] ?? 'Заявка отправлена.').toString());
+        return (true, (data['message'] ?? '').toString());
       }
-      return (false, (data['error'] ?? 'Не удалось отправить заявку.').toString());
+      return (false, (data['error'] ?? 'Не получилось. Попробуйте ещё раз.').toString());
     } catch (_) {
       return (false, 'Нет связи с сервером. Попробуйте ещё раз.');
     }
@@ -284,13 +374,33 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
               ),
             ),
           ),
-          if (status.helpDesk)
+          if (status.helpDesk) ...[
+            if (status.helpDeskProvider.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: Text(
+                  'Компьютер обслуживает «${status.helpDeskProvider}»',
+                  style: theme.textTheme.bodySmall,
+                ),
+              ),
             Padding(
-              padding: const EdgeInsets.only(top: 10),
+              padding: const EdgeInsets.only(top: 8),
               child: OutlinedButton.icon(
                 onPressed: _callIt,
                 icon: const Icon(Icons.support_agent, size: 18),
                 label: const Text('Позвать ИТ'),
+              ),
+            ),
+          ],
+          if (!status.helpDesk && status.joinCode)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: InkWell(
+                onTap: _enterCode,
+                child: Text(
+                  'Есть код от мастера?',
+                  style: theme.textTheme.bodySmall?.copyWith(decoration: TextDecoration.underline),
+                ),
               ),
             ),
         ],

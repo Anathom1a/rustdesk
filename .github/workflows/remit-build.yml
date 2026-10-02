@@ -640,13 +640,36 @@ jobs:
           fi
           ./build.py --flutter --hwcodec --unix-file-copy-paste ${{ matrix.job.extra-build-args }}
 
+      - name: Фирменное имя приложения и подпись
+        if: env.UPLOAD_ARTIFACT == 'true'
+        run: |
+          APP="${{ vars.REMIT_APP_NAME || 'RemIT' }}"
+          cd ./flutter/build/macos/Build/Products/Release
+          if [ "$APP" != "RustDesk" ] && [ -d RustDesk.app ]; then
+            rm -rf "$APP.app"
+            mv RustDesk.app "$APP.app"
+            PLIST="$APP.app/Contents/Info.plist"
+            EXE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$PLIST")"
+            if [ "$EXE" != "$APP" ]; then
+              mv "$APP.app/Contents/MacOS/$EXE" "$APP.app/Contents/MacOS/$APP"
+              /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable $APP" "$PLIST"
+            fi
+            /usr/libexec/PlistBuddy -c "Set :CFBundleName $APP" "$PLIST"
+            /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName $APP" "$PLIST" \
+              || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string $APP" "$PLIST"
+          fi
+          # Подпись ad-hoc (без сертификата). С сертификатом Apple следующий
+          # шаг подпишет приложение заново и отправит на нотаризацию.
+          codesign --force --deep --sign - "$APP.app"
+          codesign --verify --deep --strict --verbose=2 "$APP.app"
+
       - name: create unsigned dmg
         if: env.UPLOAD_ARTIFACT == 'true'
         run: |
           CREATE_DMG="$(command -v create-dmg)"
           CREATE_DMG="$(readlink -f "$CREATE_DMG")"
           sed -i -e 's/MAXIMUM_UNMOUNTING_ATTEMPTS=3/MAXIMUM_UNMOUNTING_ATTEMPTS=7/' "$CREATE_DMG"
-          create-dmg --icon "RustDesk.app" 200 190 --hide-extension "RustDesk.app" --window-size 800 400 --app-drop-link 600 185 rustdesk-${{ env.VERSION }}.dmg ./flutter/build/macos/Build/Products/Release/RustDesk.app
+          create-dmg --volname "${{ vars.REMIT_APP_NAME || 'RemIT' }}" --icon "${{ vars.REMIT_APP_NAME || 'RemIT' }}.app" 200 190 --hide-extension "${{ vars.REMIT_APP_NAME || 'RemIT' }}.app" --window-size 800 400 --app-drop-link 600 185 rustdesk-${{ env.VERSION }}.dmg "./flutter/build/macos/Build/Products/Release/${{ vars.REMIT_APP_NAME || 'RemIT' }}.app"
 
       - name: Upload unsigned macOS app
         if: env.UPLOAD_ARTIFACT == 'true'
@@ -667,8 +690,8 @@ jobs:
           security unlock-keychain -p ${{ secrets.MACOS_P12_PASSWORD }} rustdesk.keychain
           # start sign the rustdesk.app and dmg
           rm -rf *.dmg || true
-          codesign --force --options runtime -s ${{ secrets.MACOS_CODESIGN_IDENTITY }} --deep --strict ./flutter/build/macos/Build/Products/Release/RustDesk.app -vvv
-          create-dmg --icon "RustDesk.app" 200 190 --hide-extension "RustDesk.app" --window-size 800 400 --app-drop-link 600 185 rustdesk-${{ env.VERSION }}.dmg ./flutter/build/macos/Build/Products/Release/RustDesk.app
+          codesign --force --options runtime -s ${{ secrets.MACOS_CODESIGN_IDENTITY }} --deep --strict "./flutter/build/macos/Build/Products/Release/${{ vars.REMIT_APP_NAME || 'RemIT' }}.app" -vvv
+          create-dmg --volname "${{ vars.REMIT_APP_NAME || 'RemIT' }}" --icon "${{ vars.REMIT_APP_NAME || 'RemIT' }}.app" 200 190 --hide-extension "${{ vars.REMIT_APP_NAME || 'RemIT' }}.app" --window-size 800 400 --app-drop-link 600 185 rustdesk-${{ env.VERSION }}.dmg "./flutter/build/macos/Build/Products/Release/${{ vars.REMIT_APP_NAME || 'RemIT' }}.app"
           codesign --force --options runtime -s ${{ secrets.MACOS_CODESIGN_IDENTITY }} --deep --strict rustdesk-${{ env.VERSION }}.dmg -vvv
           # notarize the rustdesk-${{ env.VERSION }}.dmg
           rcodesign notary-submit --api-key-path ${{ github.workspace }}/rustdesk.json  --staple rustdesk-${{ env.VERSION }}.dmg

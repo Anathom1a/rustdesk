@@ -571,7 +571,7 @@ def gate_voice_call_by_plan(root: Path) -> None:
 
 INVENTORY_FN = r"""
 // RemIT: сведения для инвентаризации парка — диски, время работы,
-// производитель и модель компьютера. Уходят вместе с остальными сведениями
+// производитель и модель компьютера, установленные программы. Уходят вместе с остальными сведениями
 // о системе (/api/sysinfo); сервер просит обновлять их раз в 12 часов.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn remit_inventory(out: &mut serde_json::Value) {
@@ -627,6 +627,100 @@ fn remit_inventory(out: &mut serde_json::Value) {
             out["model"] = json!(String::from_utf8_lossy(&output.stdout).trim());
         }
     }
+    out["apps"] = json!(remit_apps());
+}
+
+// RemIT: установленные программы для инвентаризации — название, версия,
+// издатель и дата установки. Только чтение: реестр «Установка и удаление
+// программ» (Windows), список пакетов dpkg (Linux), папка «Программы» (macOS).
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn remit_apps() -> Vec<serde_json::Value> {
+    use serde_json::json;
+    const LIMIT: usize = 1500;
+    let mut apps: Vec<(String, String, String, String)> = Vec::new();
+    #[cfg(windows)]
+    {
+        use winreg::{
+            enums::{HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_32KEY, KEY_WOW64_64KEY},
+            RegKey,
+        };
+        const UNINSTALL: &str = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall";
+        let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+        for view in [KEY_WOW64_64KEY, KEY_WOW64_32KEY] {
+            let Ok(root) = hklm.open_subkey_with_flags(UNINSTALL, KEY_READ | view) else {
+                continue;
+            };
+            for name in root.enum_keys().flatten() {
+                let Ok(key) = root.open_subkey_with_flags(&name, KEY_READ | view) else {
+                    continue;
+                };
+                let text = |field: &str| key.get_value::<String, _>(field).unwrap_or_default().trim().to_owned();
+                let display = text("DisplayName");
+                // Системные компоненты и обновления — не программы.
+                let system = key.get_value::<u32, _>("SystemComponent").unwrap_or(0) == 1;
+                let update = !text("ParentKeyName").is_empty()
+                    || matches!(text("ReleaseType").as_str(), "Update" | "Hotfix" | "Security Update");
+                if display.is_empty() || system || update {
+                    continue;
+                }
+                apps.push((display, text("DisplayVersion"), text("Publisher"), text("InstallDate")));
+            }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(status) = std::fs::read_to_string("/var/lib/dpkg/status") {
+            for block in status.split("\n\n") {
+                let field = |name: &str| {
+                    block
+                        .lines()
+                        .find_map(|line| line.strip_prefix(name))
+                        .map(|value| value.trim().to_owned())
+                        .unwrap_or_default()
+                };
+                if !field("Status:").ends_with("installed") || field("Status:").contains("not-installed") {
+                    continue;
+                }
+                let package = field("Package:");
+                if !package.is_empty() {
+                    // Сопровождающий без адреса почты: «Ubuntu Developers <…>» → «Ubuntu Developers».
+                    let maintainer = field("Maintainer:");
+                    let publisher = maintainer.split('<').next().unwrap_or("").trim().to_owned();
+                    apps.push((package, field("Version:"), publisher, String::new()));
+                }
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(entries) = std::fs::read_dir("/Applications") {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().map_or(false, |ext| ext == "app") {
+                    let name = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                    // Версия — из Info.plist, если он текстовый.
+                    let version = std::fs::read_to_string(path.join("Contents/Info.plist"))
+                        .ok()
+                        .and_then(|plist| {
+                            let tail = plist.split("<key>CFBundleShortVersionString</key>").nth(1)?;
+                            let start = tail.find("<string>")? + "<string>".len();
+                            let end = tail[start..].find("</string>")? + start;
+                            Some(tail[start..end].trim().to_owned())
+                        })
+                        .unwrap_or_default();
+                    apps.push((name, version, String::new(), String::new()));
+                }
+            }
+        }
+    }
+    apps.sort();
+    apps.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
+    apps.truncate(LIMIT);
+    apps.into_iter()
+        .map(|(name, version, publisher, installed)| {
+            json!({ "name": name, "version": version, "publisher": publisher, "installed": installed })
+        })
+        .collect()
 }
 """
 

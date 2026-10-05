@@ -36,6 +36,7 @@ class RemITStatus {
     required this.helpDesk,
     required this.helpDeskProvider,
     required this.helpDeskTitle,
+    required this.helpDeskKind,
     required this.joinCode,
   });
 
@@ -55,12 +56,18 @@ class RemITStatus {
   final String helpDeskProvider;
   // Подпись кнопки: «Позвать ИТ» (сотрудник компании) или «Позвать мастера» (клиент мастера).
   final String helpDeskTitle;
+  // it или master: клиенту мастера окно заявки спрашивает телефон или Telegram.
+  final String helpDeskKind;
   // Можно ввести код от мастера.
   final bool joinCode;
 }
 
 // Заявку из одного слова мастер не разберёт — просим описать подробнее.
 const int _kHelpMessageMin = 10;
+// Телефон или Telegram клиента мастера: короче — точно не контакт.
+const int _kHelpContactMin = 5;
+// Последний указанный контакт — чтобы не вводить его каждый раз.
+const String _kHelpContactOption = 'remit-help-contact';
 
 class RemITStatusCard extends StatefulWidget {
   const RemITStatusCard({Key? key}) : super(key: key);
@@ -136,6 +143,7 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
         helpDeskTitle: (data['helpDeskTitle'] ?? '').toString().isNotEmpty
             ? data['helpDeskTitle'].toString()
             : 'Позвать ИТ',
+        helpDeskKind: (data['helpDeskKind'] ?? 'it').toString(),
         joinCode: data['joinCode'] == true,
       );
 
@@ -147,10 +155,15 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
     }
   }
 
-  /// «Позвать ИТ»: сотрудник описывает проблему, заявка уходит в кабинет
-  /// и на почту тем, кто обслуживает этот компьютер.
+  /// «Позвать ИТ» / «Позвать мастера»: человек описывает проблему (клиент
+  /// мастера — ещё и телефон или Telegram), заявка уходит в кабинет и в
+  /// Telegram тем, кто обслуживает этот компьютер.
   Future<void> _callIt() async {
     final controller = TextEditingController();
+    // Клиенту мастера: как с ним связаться, пока мастер не подключился.
+    final askContact = _status?.helpDeskKind == 'master';
+    final contactController = TextEditingController(
+        text: askContact ? bind.mainGetLocalOption(key: _kHelpContactOption) : '');
     String? result;
     bool sending = false;
     await showDialog<void>(
@@ -176,6 +189,16 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
                   maxLength: 1000,
                   decoration: const InputDecoration(hintText: 'Например: не печатает принтер в бухгалтерии'),
                 ),
+                if (askContact)
+                  TextField(
+                    controller: contactController,
+                    maxLength: 100,
+                    keyboardType: TextInputType.phone,
+                    decoration: const InputDecoration(
+                      labelText: 'Телефон или Telegram',
+                      hintText: 'Например: +7 900 123-45-67 или @ivan',
+                    ),
+                  ),
                 if (result != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 8),
@@ -198,8 +221,16 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
                         setDialogState(() => result = 'Опишите, что случилось, хотя бы парой слов — так мастер быстрее поможет.');
                         return;
                       }
+                      final contact = contactController.text.trim();
+                      if (askContact && contact.length < _kHelpContactMin) {
+                        setDialogState(() => result = 'Укажите телефон или Telegram — так мастер сможет сразу с вами связаться.');
+                        return;
+                      }
                       setDialogState(() => sending = true);
-                      final answer = await _sendHelp(text);
+                      final answer = await _sendHelp(text, askContact ? contact : null);
+                      if (answer.$1 && askContact) {
+                        await bind.mainSetLocalOption(key: _kHelpContactOption, value: contact);
+                      }
                       setDialogState(() {
                         sending = false;
                         result = answer.$2;
@@ -213,6 +244,7 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
       ),
     );
     controller.dispose();
+    contactController.dispose();
   }
 
   /// «Код от мастера»: клиент вводит код, который мастер прислал ему
@@ -284,8 +316,11 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
     controller.dispose();
   }
 
-  Future<(bool, String)> _sendHelp(String message) async {
-    final answer = await _post('/api/v1/client/help', {'message': message});
+  Future<(bool, String)> _sendHelp(String message, String? contact) async {
+    final answer = await _post('/api/v1/client/help', {
+      'message': message,
+      if (contact != null) 'contact': contact,
+    });
     return (answer.$1, answer.$1 && answer.$2.isEmpty ? 'Заявка отправлена.' : answer.$2);
   }
 

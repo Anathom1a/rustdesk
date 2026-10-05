@@ -1602,6 +1602,37 @@ def enable_mobile_update_card(path: Path) -> None:
     print(f"Предложение обновиться включено на экране телефона: {path}")
 
 
+def brand_uri_scheme(root: Path, app_name: str) -> None:
+    """Ссылки вида remit://connect/<ID> (кнопка «Подключиться» в кабинете).
+
+    Программа принимает ссылки со схемой «название в нижнем регистре»
+    (get_uri_prefix), и Windows её так и регистрирует. А macOS (Info.plist)
+    и Linux (rustdesk-link.desktop) у RustDesk зашиты на «rustdesk» — там
+    ссылка remit:// не открыла бы программу.
+    """
+    scheme = app_name.lower()
+    targets = [
+        (
+            root / "flutter" / "macos" / "Runner" / "Info.plist",
+            "<key>CFBundleURLSchemes</key>\n\t\t\t<array>\n\t\t\t\t<string>rustdesk</string>",
+            f"<key>CFBundleURLSchemes</key>\n\t\t\t<array>\n\t\t\t\t<string>{scheme}</string>",
+        ),
+        (
+            root / "res" / "rustdesk-link.desktop",
+            "MimeType=x-scheme-handler/rustdesk;",
+            f"MimeType=x-scheme-handler/{scheme};",
+        ),
+    ]
+    for path, anchor, replacement in targets:
+        source = path.read_text(encoding="utf-8")
+        if replacement in source:
+            continue
+        if anchor not in source:
+            raise SystemExit(f"{path}: не найдено «{anchor}» — обновите скрипт.")
+        path.write_text(source.replace(anchor, replacement), encoding="utf-8")
+    print(f"Ссылки {scheme}:// открывают программу на macOS и Linux")
+
+
 def brand_update_file_names(root: Path, app_name: str) -> None:
     """Имя скачанного обновления: remit-1.4.9.19-x86_64.exe вместо rustdesk-….
 
@@ -1797,6 +1828,7 @@ def main() -> int:
     install_font(args.root, args.brand_dir)
     rebrand_visible_strings(args.root, args.app_name)
     brand_update_file_names(args.root, args.app_name)
+    brand_uri_scheme(args.root, args.app_name)
     rebrand_lang_strings(args.root, args.app_name)
     print(
         "\nГотово. Осталось проверить строки установщика и собрать клиент."

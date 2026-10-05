@@ -80,6 +80,9 @@ BRAND_FILES = [
     "flutter/windows/runner/main.cpp",
     "flutter/windows/runner/Runner.rc",
     "Cargo.toml",
+    # Самораспаковывающийся .exe с сайта и для обновления: его «Описание» и
+    # «Название продукта» Windows показывает в окне запроса прав администратора.
+    "libs/portable/Cargo.toml",
 ]
 # flutter/macos/Runner/Configs/AppInfo.xcconfig намеренно не трогаем: PRODUCT_NAME
 # задаёт имя бандла RustDesk.app, на которое завязана упаковка dmg в CI.
@@ -1599,6 +1602,39 @@ def enable_mobile_update_card(path: Path) -> None:
     print(f"Предложение обновиться включено на экране телефона: {path}")
 
 
+def brand_update_file_names(root: Path, app_name: str) -> None:
+    """Имя скачанного обновления: remit-1.4.9.19-x86_64.exe вместо rustdesk-….
+
+    Программа сохраняет обновление во временную папку под именем, которое
+    собирает сама, и запускает его с правами администратора — это имя видно
+    клиенту в окне запроса прав. Сайту префикс не важен: файл он подбирает по
+    расширению и архитектуре (lib/updates.ts, resolveDownload).
+    """
+    prefix = f"{app_name.lower()}-"
+    patches = {
+        "src/updater.rs": [
+            ('"{}/rustdesk-{}-{}.{}",', '"{}/' + prefix + '{}-{}.{}",'),
+            ('"{}/rustdesk-{}-x86-sciter.exe"', '"{}/' + prefix + '{}-x86-sciter.exe"'),
+        ],
+        "src/flutter_ffi.rs": [('format!("rustdesk-{_version}-', 'format!("' + prefix + '{_version}-')],
+        # Уборка старых скачанных обновлений во временной папке.
+        "src/platform/windows.rs": [
+            ('file_name.starts_with("rustdesk-")', f'(file_name.starts_with("rustdesk-") || file_name.starts_with("{prefix}"))'),
+        ],
+    }
+    for relative, replacements in patches.items():
+        path = root / relative
+        if not path.is_file():
+            raise SystemExit(f"{path}: файл не найден — обновите скрипт.")
+        source = path.read_text(encoding="utf-8")
+        for anchor, replacement in replacements:
+            if anchor not in source:
+                raise SystemExit(f"{path}: не найдено «{anchor}» — обновите скрипт.")
+            source = source.replace(anchor, replacement)
+        path.write_text(source, encoding="utf-8")
+    print(f"Обновления скачиваются как {prefix}<версия>-<архитектура>.<exe|msi|dmg>")
+
+
 def rebrand_visible_strings(root: Path, app_name: str) -> None:
     total = 0
     for relative in BRAND_FILES:
@@ -1760,6 +1796,7 @@ def main() -> int:
     install_brand_assets(args.root, args.brand_dir)
     install_font(args.root, args.brand_dir)
     rebrand_visible_strings(args.root, args.app_name)
+    brand_update_file_names(args.root, args.app_name)
     rebrand_lang_strings(args.root, args.app_name)
     print(
         "\nГотово. Осталось проверить строки установщика и собрать клиент."

@@ -68,6 +68,8 @@ const int _kHelpMessageMin = 10;
 const int _kHelpContactMin = 5;
 // Последний указанный контакт — чтобы не вводить его каждый раз.
 const String _kHelpContactOption = 'remit-help-contact';
+// Согласие на обработку данных заявки (152-ФЗ) уже дано на этом компьютере.
+const String _kHelpConsentOption = 'remit-help-consent';
 
 class RemITStatusCard extends StatefulWidget {
   const RemITStatusCard({Key? key}) : super(key: key);
@@ -164,6 +166,9 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
     final askContact = _status?.helpDeskKind == 'master';
     final contactController = TextEditingController(
         text: askContact ? bind.mainGetLocalOption(key: _kHelpContactOption) : '');
+    // Галочка не стоит заранее: согласие даёт сам человек. Однажды данное —
+    // запоминаем, пока его не отзовут.
+    bool consent = askContact && bind.mainGetLocalOption(key: _kHelpConsentOption) == 'Y';
     String? result;
     bool sending = false;
     await showDialog<void>(
@@ -199,6 +204,36 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
                       hintText: 'Например: +7 900 123-45-67 или @ivan',
                     ),
                   ),
+                if (askContact)
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Checkbox(
+                        value: consent,
+                        onChanged: (value) => setDialogState(() => consent = value == true),
+                      ),
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: Wrap(
+                            children: [
+                              const Text('Согласен на обработку текста заявки, контакта и сведений о компьютере и их передачу мастеру. '),
+                              InkWell(
+                                onTap: () => launchUrl(Uri.parse('$kRemITSite/dokumenty/soglasie')),
+                                child: Text(
+                                  'Подробнее',
+                                  style: TextStyle(
+                                    color: Theme.of(context).colorScheme.primary,
+                                    decoration: TextDecoration.underline,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 if (result != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 8),
@@ -226,10 +261,15 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
                         setDialogState(() => result = 'Укажите телефон или Telegram — так мастер сможет сразу с вами связаться.');
                         return;
                       }
+                      if (askContact && !consent) {
+                        setDialogState(() => result = 'Отметьте согласие на обработку данных — без него заявку отправить нельзя.');
+                        return;
+                      }
                       setDialogState(() => sending = true);
                       final answer = await _sendHelp(text, askContact ? contact : null);
                       if (answer.$1 && askContact) {
                         await bind.mainSetLocalOption(key: _kHelpContactOption, value: contact);
+                        await bind.mainSetLocalOption(key: _kHelpConsentOption, value: 'Y');
                       }
                       setDialogState(() {
                         sending = false;
@@ -320,6 +360,8 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
     final answer = await _post('/api/v1/client/help', {
       'message': message,
       if (contact != null) 'contact': contact,
+      // Отправить можно только с отмеченным согласием (152-ФЗ).
+      if (contact != null) 'consent': 'yes',
     });
     return (answer.$1, answer.$1 && answer.$2.isEmpty ? 'Заявка отправлена.' : answer.$2);
   }

@@ -5,7 +5,8 @@
 //
 // Карточка показывает остаток бесплатного времени на сегодня либо срок
 // действия подписки. На компьютерах под управлением (модуль «Управление»)
-// в ней же кнопка «Позвать ИТ» — заявка уходит тем, кто обслуживает компьютер.
+// в ней же кнопка «Позвать ИТ» (компьютер компании) или «Позвать мастера»
+// (клиент компьютерного мастера) — заявка уходит тем, кто обслуживает компьютер.
 // Если компьютер ещё никто не обслуживает, в карточке есть «Код от мастера»:
 // клиент вводит код, и компьютер попадает под обслуживание. Данные берутся с
 // нашего сервера раз в минуту; если связи нет, карточка просто не показывается.
@@ -34,6 +35,7 @@ class RemITStatus {
     required this.linkText,
     required this.helpDesk,
     required this.helpDeskProvider,
+    required this.helpDeskTitle,
     required this.joinCode,
   });
 
@@ -49,8 +51,10 @@ class RemITStatus {
   final String linkText;
   // Компьютер под управлением: в карточке есть кнопка «Позвать ИТ».
   final bool helpDesk;
-  // Кто обслуживает компьютер (название фирмы мастера).
+  // Кто обслуживает компьютер (имя мастера; у ИТ компании пусто).
   final String helpDeskProvider;
+  // Подпись кнопки: «Позвать ИТ» (сотрудник компании) или «Позвать мастера» (клиент мастера).
+  final String helpDeskTitle;
   // Можно ввести код от мастера.
   final bool joinCode;
 }
@@ -129,6 +133,9 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
             : (exhausted ? 'Посмотреть тарифы' : 'Личный кабинет'),
         helpDesk: data['helpDesk'] == true,
         helpDeskProvider: (data['helpDeskProvider'] ?? '').toString(),
+        helpDeskTitle: (data['helpDeskTitle'] ?? '').toString().isNotEmpty
+            ? data['helpDeskTitle'].toString()
+            : 'Позвать ИТ',
         joinCode: data['joinCode'] == true,
       );
 
@@ -150,7 +157,7 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Позвать ИТ'),
+          title: Text(_status?.helpDeskTitle ?? 'Позвать ИТ'),
           content: SizedBox(
             width: 380,
             child: Column(
@@ -158,7 +165,7 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(_status?.helpDeskProvider.isNotEmpty == true
-                    ? 'Опишите, что случилось. Заявка уйдёт в «${_status!.helpDeskProvider}» — специалист увидит сведения о компьютере и подключится.'
+                    ? 'Опишите, что случилось. Заявка уйдёт мастеру «${_status!.helpDeskProvider}» — он увидит сведения о компьютере и подключится.'
                     : 'Опишите, что случилось. Специалист увидит сведения о компьютере и подключится.'),
                 const SizedBox(height: 12),
                 TextField(
@@ -226,7 +233,7 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Введите код, который прислал ваш компьютерный мастер. После этого в программе появится кнопка «Позвать ИТ».'),
+                const Text('Введите код, который прислал ваш компьютерный мастер. После этого в программе появится кнопка «Позвать мастера».'),
                 const SizedBox(height: 12),
                 if (!done)
                   TextField(
@@ -379,7 +386,7 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
               Padding(
                 padding: const EdgeInsets.only(top: 10),
                 child: Text(
-                  'Компьютер обслуживает «${status.helpDeskProvider}»',
+                  'Ваш мастер: «${status.helpDeskProvider}»',
                   style: theme.textTheme.bodySmall,
                 ),
               ),
@@ -388,7 +395,7 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
               child: OutlinedButton.icon(
                 onPressed: _callIt,
                 icon: const Icon(Icons.support_agent, size: 18),
-                label: const Text('Позвать ИТ'),
+                label: Text(status.helpDeskTitle),
               ),
             ),
           ],

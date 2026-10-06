@@ -479,6 +479,9 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
   /// (например, в чат), — и компьютер попадает под обслуживание.
   Future<void> _enterCode() async {
     final controller = TextEditingController();
+    // Согласие на обслуживание и управление этим компьютером (152-ФЗ): для кода
+    // управления оно обязательно. Для кода мастера тоже просим — так честно.
+    bool consent = false;
     String? result;
     bool sending = false;
     bool done = false;
@@ -486,16 +489,16 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Код от мастера'),
+          title: const Text('Код подключения'),
           content: SizedBox(
-            width: 380,
+            width: 400,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Введите код, который прислал ваш компьютерный мастер. После этого в программе появится кнопка «Позвать мастера».'),
+                const Text('Введите код, который прислал ваш специалист или мастер. После этого он сможет обслуживать и, если это код управления, полностью настраивать этот компьютер.'),
                 const SizedBox(height: 12),
-                if (!done)
+                if (!done) ...[
                   TextField(
                     controller: controller,
                     autofocus: true,
@@ -503,6 +506,36 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
                     maxLength: 12,
                     decoration: const InputDecoration(hintText: 'Например: K7QM-4PZ2'),
                   ),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Checkbox(
+                        value: consent,
+                        onChanged: (value) => setDialogState(() => consent = value == true),
+                      ),
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: Wrap(
+                            children: [
+                              const Text('Я разрешаю тому, кто дал код, обслуживать и управлять этим компьютером и обрабатывать сведения о нём. '),
+                              InkWell(
+                                onTap: () => launchUrl(Uri.parse('$kRemITSite/dokumenty/soglasie')),
+                                child: Text(
+                                  'Подробнее',
+                                  style: TextStyle(
+                                    color: Theme.of(context).colorScheme.primary,
+                                    decoration: TextDecoration.underline,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
                 if (result != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 8),
@@ -526,8 +559,12 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
                           setDialogState(() => result = 'В коде 8 букв и цифр — проверьте его.');
                           return;
                         }
+                        if (!consent) {
+                          setDialogState(() => result = 'Отметьте согласие — без него подключить нельзя.');
+                          return;
+                        }
                         setDialogState(() => sending = true);
-                        final answer = await _post('/api/v1/client/join', {'code': code});
+                        final answer = await _post('/api/v1/client/join', {'code': code, 'consent': 'yes'});
                         setDialogState(() {
                           sending = false;
                           done = answer.$1;
@@ -670,7 +707,7 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
               child: InkWell(
                 onTap: _enterCode,
                 child: Text(
-                  'Есть код от мастера?',
+                  'Есть код подключения?',
                   style: theme.textTheme.bodySmall?.copyWith(decoration: TextDecoration.underline),
                 ),
               ),

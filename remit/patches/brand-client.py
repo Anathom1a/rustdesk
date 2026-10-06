@@ -75,6 +75,9 @@ BRAND_FILES = [
     "flutter/pubspec.yaml",
     "res/setup.nsi",
     "res/msi/Package/Package.wxs",
+    # Строки установщика MSI: имя папки установки, ярлыки Пуска, служба, принтер,
+    # «Установка и удаление программ». Без этого в них оставалось бы «RustDesk».
+    "res/msi/Package/Language/Package.en-us.wxl",
     "res/rustdesk.desktop",
     "res/rustdesk-link.desktop",
     "flutter/windows/runner/main.cpp",
@@ -154,8 +157,9 @@ def lock_servers(path: Path, args: argparse.Namespace) -> None:
     правку конфига нельзя.
 
     Там же: блокировка ввода на удалённом компьютере выключена для всех
-    (enable-block-input=N — у подключившегося пропадает и кнопка), а смена ID
-    убрана из интерфейса (disable-change-id): ID выдаёт сервер.
+    (enable-block-input=N — у подключившегося пропадает и кнопка), смена ID
+    убрана из интерфейса (disable-change-id): ID выдаёт сервер, и вкладка
+    «Доступные устройства» (группа организации) отключена (disable-group-panel).
 
     Ретранслятор по умолчанию закреплён пустым: тогда клиент берёт тот, что
     назначил hbbs (rendezvous_mediator.rs, get_relay_server), а hbbs
@@ -191,6 +195,9 @@ def lock_servers(path: Path, args: argparse.Namespace) -> None:
                 '            ("hide-server-settings".to_owned(), "Y".to_owned()),\n'
                 # ID выдаёт сервер и по нему считается тариф — менять его нельзя.
                 '            ("disable-change-id".to_owned(), "Y".to_owned()),\n'
+                # Вкладка «Доступные устройства» (группа организации) не нужна —
+                # устройства команды видны через адресную книгу и кабинет.
+                '            ("disable-group-panel".to_owned(), "Y".to_owned()),\n'
                 "        ]));"
             ),
         ),
@@ -1776,6 +1783,40 @@ def rebrand_visible_strings(root: Path, app_name: str) -> None:
     print(f"Название продукта заменено в видимых строках: {total}")
 
 
+# Помощник режима приватности (затемнение экрана) лежит рядом с программой под
+# именем RuntimeBroker_rustdesk.exe — оно видно в папке установки. Переименовываем
+# во всех ссылках; сам файл-артефакт переименовывает сборочный workflow тем же
+# именем. Имя ищется клиентом как есть, поэтому меняем согласованно везде.
+RUNTIME_BROKER_FILES = [
+    "libs/portable/src/main.rs",
+    "src/privacy_mode/win_topmost_window.rs",
+    "res/msi/CustomActions/CustomActions.cpp",
+    "res/msi/Package/Components/RustDesk.wxs",
+]
+
+
+def runtime_broker_name(app_name: str) -> str:
+    return f"RuntimeBroker_{app_name.lower()}.exe"
+
+
+def rebrand_runtime_broker(root: Path, app_name: str) -> None:
+    old = "RuntimeBroker_rustdesk.exe"
+    new = runtime_broker_name(app_name)
+    total = 0
+    for relative in RUNTIME_BROKER_FILES:
+        path = root / relative
+        if not path.is_file():
+            continue
+        source = path.read_text(encoding="utf-8", errors="ignore")
+        count = source.count(old)
+        if count == 0:
+            continue
+        path.write_text(source.replace(old, new), encoding="utf-8")
+        total += count
+        print(f"  {relative}: {old} → {new} ({count})")
+    print(f"Помощник режима приватности переименован: вхождений — {total} (файл: {new})")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Ребрендинг клиента RustDesk под RemIT")
     parser.add_argument("root", type=Path, help="Путь к клону rustdesk/rustdesk")
@@ -1921,6 +1962,7 @@ def main() -> int:
     install_brand_assets(args.root, args.brand_dir)
     install_font(args.root, args.brand_dir)
     rebrand_visible_strings(args.root, args.app_name)
+    rebrand_runtime_broker(args.root, args.app_name)
     brand_update_file_names(args.root, args.app_name)
     brand_uri_scheme(args.root, args.app_name)
     rebrand_lang_strings(args.root, args.app_name)

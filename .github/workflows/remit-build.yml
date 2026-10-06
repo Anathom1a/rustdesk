@@ -397,6 +397,17 @@ jobs:
           name: ${{ matrix.job.arch == 'aarch64' && 'topmostwindow-artifacts-ARM64' || 'topmostwindow-artifacts-x64' }}
           path: "./rustdesk"
 
+      # RemIT: убираем «rustdesk» из имени помощника режима приватности в папке
+      # установки. Код и MSI ищут его под новым именем (brand-client.py).
+      - name: Rename privacy-mode helper (RemIT)
+        shell: bash
+        run: |
+          if [ -f "./rustdesk/RuntimeBroker_rustdesk.exe" ]; then
+            mv -f "./rustdesk/RuntimeBroker_rustdesk.exe" "./rustdesk/RuntimeBroker_remit.exe"
+            echo "renamed RuntimeBroker_rustdesk.exe -> RuntimeBroker_remit.exe"
+          fi
+          ls -l ./rustdesk | grep -i runtimebroker || true
+
       - name: Upload unsigned
         if: env.UPLOAD_ARTIFACT == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

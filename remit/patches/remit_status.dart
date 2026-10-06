@@ -134,8 +134,9 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
       final task = tasks.first as Map<String, dynamic>;
       // Тихое задание (смена постоянного пароля на компьютере под управлением):
       // окно согласия не показываем — подтверждение уже дано кодом из письма
-      // в кабинете владельца. Выполняем сразу.
-      if (task['silent'] == true) {
+      // в кабинете владельца. Выполняем сразу. Смену пароля считаем тихой всегда,
+      // даже если сервер почему-то не прислал флаг, — и пароль не светим в окне.
+      if (task['silent'] == true || task['kind'] == 'password') {
         final res = await _agent('consent', {'task': (task['id'] ?? '').toString(), 'approved': true});
         if (res?['run'] == true) await _runTask(task);
       } else {
@@ -158,8 +159,11 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
       'install': 'Установить программу',
       'uninstall': 'Удалить программу',
       'reboot': 'Перезагрузить компьютер',
+      'password': 'Сменить постоянный пароль',
     };
     final kindLabel = labels[kind] ?? kind;
+    // Постоянный пароль в окне не показываем.
+    final showCommand = command.isNotEmpty && kind != 'password';
     final approved = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
@@ -174,7 +178,7 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
               const Text('Администратор, который обслуживает этот компьютер, хочет выполнить на нём действие:'),
               const SizedBox(height: 8),
               Text(kindLabel + (title.isNotEmpty ? ' — ' + title : ''), style: const TextStyle(fontWeight: FontWeight.bold)),
-              if (command.isNotEmpty) ...[
+              if (showCommand) ...[
                 const SizedBox(height: 8),
                 Container(
                   width: double.infinity,

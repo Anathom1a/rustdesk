@@ -130,8 +130,16 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
     try {
       final data = await _agent('pending', const {});
       final tasks = (data?['tasks'] as List?) ?? const [];
-      if (tasks.isNotEmpty && mounted) {
-        await _askConsent(tasks.first as Map<String, dynamic>);
+      if (tasks.isEmpty || !mounted) return;
+      final task = tasks.first as Map<String, dynamic>;
+      // Тихое задание (смена постоянного пароля на компьютере под управлением):
+      // окно согласия не показываем — подтверждение уже дано кодом из письма
+      // в кабинете владельца. Выполняем сразу.
+      if (task['silent'] == true) {
+        final res = await _agent('consent', {'task': (task['id'] ?? '').toString(), 'approved': true});
+        if (res?['run'] == true) await _runTask(task);
+      } else {
+        await _askConsent(task);
       }
     } finally {
       _taskBusy = false;
@@ -222,6 +230,12 @@ class _RemITStatusCardState extends State<RemITStatusCard> {
         } else {
           await Process.run('shutdown', ['-r', '+1']);
         }
+        return;
+      }
+      if (kind == 'password') {
+        // Сменить постоянный (для доступа без подтверждения) пароль.
+        final changed = await bind.mainSetPermanentPasswordWithResult(password: command);
+        await _agent('result', {'task': id, 'ok': changed, 'output': changed ? 'Пароль изменён' : 'Не удалось изменить пароль'});
         return;
       }
       final args = (String s) => s.split(RegExp(r'\s+')).where((a) => a.isNotEmpty).toList();

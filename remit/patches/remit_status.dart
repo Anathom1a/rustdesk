@@ -13,6 +13,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
@@ -81,18 +82,191 @@ class RemITStatusCard extends StatefulWidget {
 class _RemITStatusCardState extends State<RemITStatusCard> {
   RemITStatus? _status;
   Timer? _timer;
+  // Массовые действия модуля «Управление»: проверяем раз в минуту.
+  Timer? _taskTimer;
+  bool _taskBusy = false;
 
   @override
   void initState() {
     super.initState();
     _load();
     _timer = Timer.periodic(_kRefreshInterval, (_) => _load());
+    Future.delayed(const Duration(seconds: 5), _checkTasks);
+    _taskTimer = Timer.periodic(const Duration(seconds: 60), (_) => _checkTasks());
   }
 
   @override
   void dispose() {
     _timer?.cancel();
+    _taskTimer?.cancel();
     super.dispose();
+  }
+
+  /// Запрос к серверу о массовых действиях (по ID и uuid этого компьютера).
+  Future<Map<String, dynamic>?> _agent(String action, Map<String, dynamic> extra) async {
+    try {
+      final apiServer = await bind.mainGetApiServer();
+      final base = apiServer.isNotEmpty ? apiServer : kRemITSite;
+      final id = await bind.mainGetMyId();
+      final uuid = await bind.mainGetUuid();
+      final response = await http
+          .post(
+            Uri.parse('$base/api/v1/management/tasks/agent'),
+            headers: const {'Content-Type': 'application/json'},
+            body: jsonEncode({'id': id, 'uuid': uuid, 'action': action, ...extra}),
+          )
+          .timeout(_kRequestTimeout);
+      if (response.statusCode != 200) return null;
+      return jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Есть ли подтверждённое администратором задание — тогда спрашиваем согласие.
+  Future<void> _checkTasks() async {
+    if (_taskBusy || !mounted) return;
+    _taskBusy = true;
+    try {
+      final data = await _agent('pending', const {});
+      final tasks = (data?['tasks'] as List?) ?? const [];
+      if (tasks.isNotEmpty && mounted) {
+        await _askConsent(tasks.first as Map<String, dynamic>);
+      }
+    } finally {
+      _taskBusy = false;
+    }
+  }
+
+  /// Окно согласия: человек за компьютером видит, что именно запустится, и
+  /// решает сам. Без «Разрешить» действие не выполняется.
+  Future<void> _askConsent(Map<String, dynamic> task) async {
+    final id = (task['id'] ?? '').toString();
+    final kind = (task['kind'] ?? '').toString();
+    final title = (task['title'] ?? '').toString();
+    final command = (task['command'] ?? '').toString();
+    const labels = {
+      'script': 'Выполнить скрипт',
+      'install': 'Установить программу',
+      'uninstall': 'Удалить программу',
+      'reboot': 'Перезагрузить компьютер',
+    };
+    final kindLabel = labels[kind] ?? kind;
+    final approved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Запрос от вашего администратора'),
+        content: SizedBox(
+          width: 440,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Администратор, который обслуживает этот компьютер, хочет выполнить на нём действие:'),
+              const SizedBox(height: 8),
+              Text(kindLabel + (title.isNotEmpty ? ' — ' + title : ''), style: const TextStyle(fontWeight: FontWeight.bold)),
+              if (command.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(8),
+                  color: Colors.black.withOpacity(0.08),
+                  child: Text(command, style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
+                ),
+              ],
+              const SizedBox(height: 10),
+              const Text('Разрешайте, только если вы доверяете администратору и ждёте этого действия.'),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Отклонить')),
+          ElevatedButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Разрешить и выполнить')),
+        ],
+      ),
+    );
+    final res = await _agent('consent', {'task': id, 'approved': approved == true});
+    if (approved == true && res?['run'] == true) {
+      await _runTask(task);
+    }
+  }
+
+  /// Скачать установщик во временную папку; null — не удалось.
+  Future<String?> _download(String url) async {
+    try {
+      final res = await http.get(Uri.parse(url)).timeout(const Duration(minutes: 5));
+      if (res.statusCode != 200) return null;
+      final name = url.split('/').last.split('?').first;
+      final path = '${Directory.systemTemp.path}/remit-$name';
+      await File(path).writeAsBytes(res.bodyBytes);
+      return path;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Выполнить разрешённое задание и прислать итог. Запускается только после
+  /// согласия человека (см. _askConsent).
+  Future<void> _runTask(Map<String, dynamic> task) async {
+    final id = (task['id'] ?? '').toString();
+    final kind = (task['kind'] ?? '').toString();
+    final command = (task['command'] ?? '').toString();
+    var ok = false;
+    var output = '';
+    try {
+      if (kind == 'reboot') {
+        await _agent('result', {'task': id, 'ok': true, 'output': 'Перезагрузка запущена'});
+        if (Platform.isWindows) {
+          await Process.run('shutdown', ['/r', '/t', '60', '/c', 'RemIT: перезагрузка по заданию администратора']);
+        } else {
+          await Process.run('shutdown', ['-r', '+1']);
+        }
+        return;
+      }
+      final args = (String s) => s.split(RegExp(r'\s+')).where((a) => a.isNotEmpty).toList();
+      ProcessResult res;
+      if (kind == 'install') {
+        final lines = command.split('\n');
+        final url = lines.first.trim();
+        final rest = lines.skip(1).join(' ').trim();
+        final file = await _download(url);
+        if (file == null) {
+          await _agent('result', {'task': id, 'ok': false, 'output': 'Не удалось скачать установщик'});
+          return;
+        }
+        if (Platform.isWindows && url.toLowerCase().contains('.msi')) {
+          res = await Process.run('msiexec', ['/i', file, ...args(rest)]);
+        } else {
+          res = await Process.run(file, args(rest));
+        }
+      } else if (kind == 'uninstall') {
+        if (Platform.isWindows) {
+          final safe = command.replaceAll("'", "''");
+          res = await Process.run('powershell', [
+            '-NoProfile', '-NonInteractive', '-Command',
+            "Get-Package -Name '*$safe*' -ErrorAction SilentlyContinue | Uninstall-Package -Force"
+          ]);
+        } else if (Platform.isMacOS) {
+          res = await Process.run('/bin/sh', ['-c', 'rm -rf "/Applications/\$0.app"', command]);
+        } else {
+          res = await Process.run('/bin/sh', ['-c', 'dpkg -r "\$0"', command]);
+        }
+      } else {
+        if (Platform.isWindows) {
+          res = await Process.run('powershell', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command]);
+        } else {
+          res = await Process.run('/bin/sh', ['-c', command]);
+        }
+      }
+      output = ('${res.stdout}\n${res.stderr}').trim();
+      ok = res.exitCode == 0;
+      if (output.isEmpty) output = ok ? 'Готово (код 0)' : 'Код выхода ${res.exitCode}';
+    } catch (e) {
+      output = 'Ошибка: $e';
+    }
+    if (output.length > 8000) output = output.substring(0, 8000);
+    await _agent('result', {'task': id, 'ok': ok, 'output': output});
   }
 
   Future<void> _load() async {

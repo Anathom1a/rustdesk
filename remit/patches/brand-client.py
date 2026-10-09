@@ -635,6 +635,55 @@ fn remit_inventory(out: &mut serde_json::Value) {
         }
     }
     out["apps"] = json!(remit_apps());
+    out["certs"] = json!(remit_certs());
+}
+
+// RemIT: сертификаты электронной подписи из личного хранилища пользователя
+// (Windows: Cert:\\CurrentUser\\My, в т. ч. КриптоПро) — чтобы заранее видеть
+// истекающие подписи (бухгалтерия, ЭДО). Только чтение; на других ОС пусто.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn remit_certs() -> Vec<serde_json::Value> {
+    use serde_json::json;
+    let mut certs: Vec<serde_json::Value> = Vec::new();
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        // По строке на сертификат: Subject|Issuer|NotBefore|NotAfter|Serial. UTF-8 для кириллицы в CN.
+        const SCRIPT: &str = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; Get-ChildItem Cert:\\CurrentUser\\My | ForEach-Object { '{0}|{1}|{2:yyyy-MM-dd}|{3:yyyy-MM-dd}|{4}' -f $_.Subject, $_.Issuer, $_.NotBefore, $_.NotAfter, $_.SerialNumber }";
+        let output = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+        if let Ok(output) = output {
+            // CN из X.500-имени: «CN=Иванов, O=ООО, …» → «Иванов»; иначе — имя как есть.
+            let cn = |dn: &str| {
+                dn.split(',')
+                    .find_map(|part| part.trim().strip_prefix("CN="))
+                    .unwrap_or(dn)
+                    .trim()
+                    .to_owned()
+            };
+            for line in String::from_utf8_lossy(&output.stdout).lines() {
+                let parts: Vec<&str> = line.splitn(5, '|').collect();
+                if parts.len() < 5 {
+                    continue;
+                }
+                let subject = cn(parts[0]);
+                if subject.is_empty() {
+                    continue;
+                }
+                certs.push(json!({
+                    "subject": subject,
+                    "issuer": cn(parts[1]),
+                    "not_before": parts[2].trim(),
+                    "not_after": parts[3].trim(),
+                    "serial": parts[4].trim(),
+                }));
+            }
+        }
+    }
+    certs
 }
 
 // RemIT: установленные программы для инвентаризации — название, версия,
@@ -1538,6 +1587,137 @@ def rebrand_lang_strings(root: Path, app_name: str) -> None:
     print(f"Переводы поправлены: файлов — {total}")
 
 
+HOME_IMPORT = "import 'package:flutter_hbb/remit_home.dart';"
+
+
+def write_home_widget(root: Path, site_url: str, app_name: str) -> None:
+    """Кладёт в сборку карточку «Ваш ID» (remit_home.dart)."""
+    template = Path(__file__).with_name("remit_home.dart")
+    if not template.is_file():
+        raise SystemExit(f"Не найден шаблон карточки «Ваш ID»: {template}")
+    target = root / "flutter" / "lib" / "remit_home.dart"
+    target.write_text(
+        template.read_text(encoding="utf-8")
+        .replace("__SITE_URL__", site_url)
+        .replace("__APP_NAME__", app_name),
+        encoding="utf-8",
+    )
+    print(f"Карточка «Ваш ID» добавлена: {target}")
+
+
+def restyle_home_page(path: Path) -> None:
+    """Главное окно, левая колонка: своя карточка вместо полей RustDesk.
+
+    У RustDesk ID и одноразовый пароль — два поля ввода с тонкой полоской
+    слева. Вместо них — карточка RemITIdCard: ID крупно, пароль ниже, кнопка
+    «Скопировать ID и пароль» с готовым сообщением для мессенджера. Колонка
+    шире (260 вместо 200), чтобы ID помещался крупным шрифтом.
+    """
+    patch_file(
+        path,
+        [
+            (STATUS_IMPORT_ANCHOR, STATUS_IMPORT_ANCHOR + "\n" + HOME_IMPORT),
+            (
+                """      if (!isOutgoingOnly) buildIDBoard(context),
+      if (!isOutgoingOnly) buildPasswordBoard(context),""",
+                """      // RemIT: карточка «Ваш ID» вместо полей ID и пароля RustDesk.
+      if (!isOutgoingOnly) const RemITIdCard(),""",
+            ),
+            (
+                "        width: isIncomingOnly ? 280.0 : 200.0,",
+                "        width: isIncomingOnly ? 280.0 : 260.0, // RemIT: шире под крупный ID",
+            ),
+            (
+                """            Text(
+              translate("desk_tip"),""",
+                """            Text(
+              // RemIT: одна короткая фраза — что сделать, чтобы помогли.
+              'Чтобы вам помогли, назовите ID и пароль из карточки ниже.',""",
+            ),
+        ],
+        "Главное окно: карточка «Ваш ID»",
+    )
+
+
+def restyle_connect_box(path: Path) -> None:
+    """Главное окно, правая колонка: блок «Подключиться» крупнее и заметнее.
+
+    У RustDesk кнопка «Подключиться» высотой 28 пикселей и прижата вправо, а
+    блок почти не отличается от фона. Делаем блок карточкой, поле ввода —
+    жирным, кнопку — во всю ширину и высотой 40.
+    """
+    patch_file(
+        path,
+        [
+            (
+                """      decoration: BoxDecoration(
+          borderRadius: const BorderRadius.all(Radius.circular(13)),
+          border: Border.all(color: Theme.of(context).colorScheme.background)),""",
+                """      // RemIT: блок подключения — карточка, а не рамка под цвет фона.
+      decoration: BoxDecoration(
+          color: Theme.of(context).cardColor,
+          borderRadius: const BorderRadius.all(Radius.circular(16)),
+          border: Border.all(color: Theme.of(context).dividerColor)),""",
+            ),
+            (
+                """                          style: const TextStyle(
+                            fontFamily: 'WorkSans',
+                            fontSize: 22,
+                            height: 1.4,
+                          ),""",
+                """                          style: const TextStyle(
+                            fontFamily: 'WorkSans',
+                            fontSize: 22,
+                            fontWeight: FontWeight.w600,
+                            height: 1.4,
+                          ),""",
+            ),
+            (
+                """              child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                SizedBox(
+                  height: 28.0,
+                  child: ElevatedButton(
+                    onPressed: () {
+                      onConnect();
+                    },
+                    child: Text(translate("Connect")),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  height: 28.0,
+                  width: 28.0,""",
+                """              // RemIT: «Подключиться» — во всю ширину и высотой 40.
+              child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                Expanded(
+                  child: SizedBox(
+                    height: 40.0,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10)),
+                      ),
+                      onPressed: () {
+                        onConnect();
+                      },
+                      child: Text(
+                        translate("Connect"),
+                        style: const TextStyle(
+                            fontSize: 15, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  height: 40.0,
+                  width: 40.0,""",
+            ),
+        ],
+        "Главное окно: блок «Подключиться»",
+    )
+
+
 STATUS_IMPORT_ANCHOR = "import 'package:flutter_hbb/models/state_model.dart';"
 STATUS_IMPORT = "import 'package:flutter_hbb/remit_status.dart';"
 
@@ -1939,6 +2119,11 @@ def main() -> int:
 
     if home_page.is_file():
         fix_left_pane(home_page)
+        write_home_widget(args.root, site_url, args.app_name)
+        restyle_home_page(home_page)
+    connection_page = args.root / "flutter" / "lib" / "desktop" / "pages" / "connection_page.dart"
+    if connection_page.is_file():
+        restyle_connect_box(connection_page)
     flutter_main = args.root / "flutter" / "lib" / "main.dart"
     if flutter_main.is_file():
         enlarge_install_page(flutter_main)

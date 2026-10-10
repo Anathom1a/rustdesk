@@ -13,7 +13,8 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_hbb/common.dart';
+// RemIT: в common.dart свой класс Dialog — берём диалог Flutter.
+import 'package:flutter_hbb/common.dart' hide Dialog;
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
 import 'package:flutter_hbb/models/platform_model.dart';

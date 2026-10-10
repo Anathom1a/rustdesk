@@ -1621,7 +1621,9 @@ def restyle_home_page(path: Path) -> None:
                 """      if (!isOutgoingOnly) buildIDBoard(context),
       if (!isOutgoingOnly) buildPasswordBoard(context),""",
                 """      // RemIT: карточка «Ваш ID» вместо полей ID и пароля RustDesk.
-      if (!isOutgoingOnly) const RemITIdCard(),""",
+      if (!isOutgoingOnly) const RemITIdCard(),
+      // RemIT: окно первого запуска «Что вы хотите сделать?».
+      if (!isOutgoingOnly && !isIncomingOnly) const RemITWelcome(),""",
             ),
             (
                 "        width: isIncomingOnly ? 280.0 : 200.0,",
@@ -1816,9 +1818,11 @@ PEER_CARD_NEW = """            // RemIT: своя карточка компью�
                             Text(
                               peer.alias.isNotEmpty
                                   ? peer.alias
-                                  : (peer.hostname.isNotEmpty
-                                      ? peer.hostname
-                                      : formatID(peer.id)),
+                                  : remitAbAlias(peer.id).isNotEmpty
+                                      ? remitAbAlias(peer.id)
+                                      : (peer.hostname.isNotEmpty
+                                          ? peer.hostname
+                                          : formatID(peer.id)),
                               overflow: TextOverflow.ellipsis,
                               style: Theme.of(context)
                                   .textTheme
@@ -1923,8 +1927,112 @@ def restyle_peer_cards(path: Path) -> None:
     if source.count(key_old) != 1:
         raise SystemExit(f"{path}: не найден значок сохранённого пароля — обновите скрипт.")
     source = source.replace(key_old, key_new, 1)
+    # Вид «список»: то же название из адресной книги, если своего имени нет.
+    tile_old = "                          peer.alias.isEmpty ? formatID(peer.id) : peer.alias,"
+    tile_new = (
+        "                          peer.alias.isNotEmpty\n"
+        "                              ? peer.alias\n"
+        "                              : remitAbAlias(peer.id).isNotEmpty\n"
+        "                                  ? remitAbAlias(peer.id)\n"
+        "                                  : formatID(peer.id),"
+    )
+    if source.count(tile_old) != 1:
+        raise SystemExit(f"{path}: не найдено имя в строке списка — обновите скрипт.")
+    source = source.replace(tile_old, tile_new, 1)
+    if source.count(STATUS_IMPORT_ANCHOR) != 1:
+        raise SystemExit(f"{path}: не найдено место для импорта — обновите скрипт.")
+    source = source.replace(STATUS_IMPORT_ANCHOR, STATUS_IMPORT_ANCHOR + "\n" + HOME_IMPORT, 1)
     path.write_text(source, encoding="utf-8")
     print(f"Карточки компьютеров перерисованы в {path}")
+
+
+def restyle_connection_window(path: Path) -> None:
+    """Окно «К вам подключились»: понятно, кто подключился, и крупные кнопки.
+
+    У RustDesk — синий градиент, имя и ID в скобках, кнопки высотой 28.
+    У нас: бирюзовый градиент, сверху одной фразой, что происходит
+    («К вам подключился», «Просит доступ к вашему компьютеру»), ID по три
+    цифры, кнопки высотой 36. Аватарку окно берёт из подключения само
+    (поле avatar в данных аккаунта, сайт: lib/client-api.ts).
+    """
+    patch_file(
+        path,
+        [
+            (
+                "import 'package:flutter_hbb/consts.dart';",
+                "import 'package:flutter_hbb/consts.dart';\n"
+                "import 'package:flutter_hbb/common/formatter/id_formatter.dart';",
+            ),
+            (
+                """          colors: [
+            Color(0xff00bfe1),
+            Color(0xff0071ff),
+          ],""",
+                """          // RemIT: бирюзовый вместо синего RustDesk.
+          colors: [
+            Color(0xff14b8a6),
+            Color(0xff115e59),
+          ],""",
+            ),
+            (
+                """              children: [
+                FittedBox(
+                    child: Text(
+                  client.name,""",
+                """              children: [
+                // RemIT: одной фразой — что происходит.
+                Text(
+                  !client.authorized
+                      ? 'Просит доступ к вашему компьютеру'
+                      : client.disconnected
+                          ? 'Сеанс завершён'
+                          : 'К вам подключился',
+                  style: TextStyle(color: Colors.white70, fontSize: 12.5),
+                ),
+                FittedBox(
+                    child: Text(
+                  client.name,""",
+            ),
+            (
+                """                    "(${client.peerId})",
+                    style: TextStyle(color: Colors.white, fontSize: 14),""",
+                """                    "ID ${formatID(client.peerId)}",
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontFeatures: [FontFeature.tabularFigures()]),""",
+            ),
+            (
+                """    final btn = Container(
+      height: 28,""",
+                """    final btn = Container(
+      height: 36, // RemIT: крупнее, чем 28 у RustDesk""",
+            ),
+            (
+                """      textWidget = Text(
+        translate(text),
+        style: TextStyle(color: textColor),
+        textAlign: TextAlign.center,
+      );
+    } else {
+      textWidget = Expanded(
+        child: Text(
+          translate(text),
+          style: TextStyle(color: textColor),""",
+                """      textWidget = Text(
+        translate(text),
+        style: TextStyle(color: textColor, fontWeight: FontWeight.w600),
+        textAlign: TextAlign.center,
+      );
+    } else {
+      textWidget = Expanded(
+        child: Text(
+          translate(text),
+          style: TextStyle(color: textColor, fontWeight: FontWeight.w600),""",
+            ),
+        ],
+        "Окно «К вам подключились»",
+    )
 
 
 STATUS_IMPORT_ANCHOR = "import 'package:flutter_hbb/models/state_model.dart';"
@@ -2347,6 +2455,9 @@ def main() -> int:
     peer_card = args.root / "flutter" / "lib" / "common" / "widgets" / "peer_card.dart"
     if peer_card.is_file():
         restyle_peer_cards(peer_card)
+    server_page = args.root / "flutter" / "lib" / "desktop" / "pages" / "server_page.dart"
+    if server_page.is_file():
+        restyle_connection_window(server_page)
     flutter_main = args.root / "flutter" / "lib" / "main.dart"
     if flutter_main.is_file():
         enlarge_install_page(flutter_main)

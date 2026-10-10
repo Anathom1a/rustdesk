@@ -23,6 +23,9 @@ import 'package:provider/provider.dart';
 const String kRemITHomeSite = '__SITE_URL__';
 const String kRemITHomeAppName = '__APP_NAME__';
 
+/// Подсветить карточку «Ваш ID» на несколько секунд (окно первого запуска).
+final ValueNotifier<bool> remitIdCardHighlight = ValueNotifier(false);
+
 class RemITIdCard extends StatelessWidget {
   const RemITIdCard({super.key});
 
@@ -65,13 +68,24 @@ class _RemITIdCardBody extends StatelessWidget {
     final muted = theme.textTheme.titleLarge?.color?.withOpacity(0.55);
     final labelStyle = TextStyle(fontSize: 12, color: muted);
 
-    return Container(
-      margin: const EdgeInsets.fromLTRB(12, 4, 12, 6),
-      padding: const EdgeInsets.fromLTRB(16, 12, 10, 16),
-      decoration: BoxDecoration(
-        color: theme.cardColor,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: accent.withOpacity(0.4)),
+    return ValueListenableBuilder<bool>(
+      valueListenable: remitIdCardHighlight,
+      builder: (context, highlight, child) => AnimatedContainer(
+        duration: const Duration(milliseconds: 350),
+        margin: const EdgeInsets.fromLTRB(12, 4, 12, 6),
+        padding: const EdgeInsets.fromLTRB(16, 12, 10, 16),
+        decoration: BoxDecoration(
+          color: theme.cardColor,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: accent.withOpacity(highlight ? 1 : 0.4),
+            width: highlight ? 2 : 1,
+          ),
+          boxShadow: highlight
+              ? [BoxShadow(color: accent.withOpacity(0.45), blurRadius: 22, spreadRadius: 1)]
+              : const [],
+        ),
+        child: child,
       ),
       child: ValueListenableBuilder<TextEditingValue>(
         valueListenable: model.serverId,
@@ -216,6 +230,173 @@ class _SmallIconButton extends StatelessWidget {
         child: Padding(
           padding: const EdgeInsets.all(5),
           child: Icon(icon, size: 17, color: color?.withOpacity(0.6)),
+        ),
+      ),
+    );
+  }
+}
+
+/// Название компьютера из адресной книги кабинета («Имя в книге»).
+///
+/// В «Недавних» и «Избранном» RustDesk показывает только имя, заданное на
+/// этом компьютере, а без него — имя Windows вроде DESKTOP-7F3K2. Если своё
+/// имя не задано, берём название из адресных книг аккаунта: они загружаются
+/// из кеша при запуске и обновляются с сервера. Пусто — названия нет.
+String remitAbAlias(String id) {
+  for (final book in gFFI.abModel.addressbooks.values) {
+    for (final peer in book.peers) {
+      if (peer.id == id && peer.alias.trim().isNotEmpty) return peer.alias.trim();
+    }
+  }
+  return '';
+}
+
+const String _kWelcomeOption = 'remit-welcome-done';
+
+/// Окно первого запуска: «Что вы хотите сделать?» — помогают вам или
+/// подключаетесь вы. Показывается один раз; выбор подсвечивает нужную часть
+/// главного окна. Сам виджет ничего не рисует.
+class RemITWelcome extends StatefulWidget {
+  const RemITWelcome({super.key});
+
+  @override
+  State<RemITWelcome> createState() => _RemITWelcomeState();
+}
+
+class _RemITWelcomeState extends State<RemITWelcome> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShow());
+  }
+
+  Future<void> _maybeShow() async {
+    if (!mounted || bind.mainGetLocalOption(key: _kWelcomeOption) == 'Y') return;
+    await bind.mainSetLocalOption(key: _kWelcomeOption, value: 'Y');
+    if (!mounted) return;
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (context) => const _WelcomeDialog(),
+    );
+    if (choice == 'helped') {
+      remitIdCardHighlight.value = true;
+      showToast('Назовите ID и пароль из карточки слева тому, кто помогает',
+          timeout: const Duration(seconds: 6));
+      Future.delayed(const Duration(seconds: 6), () => remitIdCardHighlight.value = false);
+    } else if (choice == 'helping') {
+      showToast('Введите ID того компьютера справа и нажмите «Подключиться»',
+          timeout: const Duration(seconds: 6));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => const SizedBox.shrink();
+}
+
+class _WelcomeDialog extends StatelessWidget {
+  const _WelcomeDialog();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final muted = theme.textTheme.titleLarge?.color?.withOpacity(0.6);
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 520),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Что вы хотите сделать?',
+                  style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 6),
+              Text('Программа одна и та же у обоих — выберите, кто вы сейчас.',
+                  style: TextStyle(fontSize: 13, color: muted)),
+              const SizedBox(height: 20),
+              _WelcomeChoice(
+                icon: Icons.front_hand_outlined,
+                title: 'Мне помогают',
+                text: 'Кто-то подключится к этому компьютеру. Покажем, какие ID и пароль ему назвать.',
+                onTap: () => Navigator.of(context).pop('helped'),
+              ),
+              const SizedBox(height: 12),
+              _WelcomeChoice(
+                icon: Icons.desktop_windows_outlined,
+                title: 'Я подключаюсь',
+                text: 'Помогаете кому-то или заходите на свой компьютер издалека.',
+                onTap: () => Navigator.of(context).pop('helping'),
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Разберусь сам'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _WelcomeChoice extends StatelessWidget {
+  const _WelcomeChoice({required this.icon, required this.title, required this.text, required this.onTap});
+
+  final IconData icon;
+  final String title;
+  final String text;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final accent = theme.colorScheme.primary;
+    return Material(
+      color: theme.cardColor,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: accent.withOpacity(0.45)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: accent.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, color: accent),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 3),
+                    Text(text,
+                        style: TextStyle(
+                            fontSize: 12.5,
+                            height: 1.35,
+                            color: theme.textTheme.titleLarge?.color?.withOpacity(0.65))),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

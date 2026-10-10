@@ -1718,6 +1718,215 @@ def restyle_connect_box(path: Path) -> None:
     )
 
 
+SESSION_IMPORT = "import 'package:flutter_hbb/remit_session.dart';"
+
+
+def write_session_widget(root: Path, site_url: str) -> None:
+    """Кладёт в сборку значок остатка времени для окна сеанса (remit_session.dart)."""
+    template = Path(__file__).with_name("remit_session.dart")
+    if not template.is_file():
+        raise SystemExit(f"Не найден шаблон значка сеанса: {template}")
+    target = root / "flutter" / "lib" / "remit_session.dart"
+    target.write_text(
+        template.read_text(encoding="utf-8").replace("__SITE_URL__", site_url),
+        encoding="utf-8",
+    )
+    print(f"Значок остатка времени добавлен: {target}")
+
+
+def restyle_session_toolbar(path: Path) -> None:
+    """Окно сеанса: на панели — остаток бесплатного времени, сама панель в цветах RemIT.
+
+    Значок RemITSessionTime встаёт перед кнопкой «Завершить». Панель — со
+    скруглёнными углами, неактивные кнопки графитовые, как фон приложения,
+    а не серые RustDesk.
+    """
+    patch_file(
+        path,
+        [
+            (STATUS_IMPORT_ANCHOR, STATUS_IMPORT_ANCHOR + "\n" + SESSION_IMPORT),
+            (
+                "    toolbarItems.add(_CloseMenu(id: widget.id, ffi: widget.ffi));",
+                "    // RemIT: остаток бесплатного времени на сегодня.\n"
+                "    toolbarItems.add(RemITSessionTime(compact: !isHorizontal));\n"
+                "    toolbarItems.add(_CloseMenu(id: widget.id, ffi: widget.ffi));",
+            ),
+            (
+                "    final toolbarBorderRadius = BorderRadius.all(Radius.circular(4.0));",
+                "    final toolbarBorderRadius = BorderRadius.all(Radius.circular(12.0)); // RemIT",
+            ),
+            (
+                "  static Color inactiveColor = Colors.grey[800]!;\n"
+                "  static Color hoverInactiveColor = Colors.grey[850]!;",
+                "  // RemIT: графит вместо серого RustDesk.\n"
+                "  static Color inactiveColor = const Color(0xFF2E333A);\n"
+                "  static Color hoverInactiveColor = const Color(0xFF22262B);",
+            ),
+            (
+                "  static const double iconRadius = 8;",
+                "  static const double iconRadius = 9; // RemIT",
+            ),
+        ],
+        "Окно сеанса: остаток времени и панель RemIT",
+    )
+
+
+# Карточка компьютера в «Недавних», «Избранном», адресной книге (вид «плитки»).
+# У RustDesk сверху — блок случайного цвета с большой иконкой системы, снизу —
+# ID. У нас: значок системы на бирюзовом квадрате, имя и «в сети», крупный ID.
+PEER_CARD_START = """            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Expanded(
+                  child: Container(
+                    color: str2color('${peer.id}${peer.platform}', 0x7f),"""
+PEER_CARD_END = """
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final colors = _frontN(peer.tags, 25)"""
+PEER_CARD_NEW = """            // RemIT: своя карточка компьютера вместо цветного блока RustDesk.
+            child: Container(
+              color: Theme.of(context).cardColor,
+              padding: const EdgeInsets.fromLTRB(14, 12, 4, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 34,
+                        height: 34,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).colorScheme.primary,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: getPlatformImage(peer.platform, size: 20),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              peer.alias.isNotEmpty
+                                  ? peer.alias
+                                  : (peer.hostname.isNotEmpty
+                                      ? peer.hostname
+                                      : formatID(peer.id)),
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .titleSmall
+                                  ?.copyWith(fontWeight: FontWeight.w600),
+                            ),
+                            Row(
+                              children: [
+                                Container(
+                                  width: 7,
+                                  height: 7,
+                                  margin: const EdgeInsets.only(right: 5),
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: peer.online
+                                        ? const Color(0xFF35D39A)
+                                        : Colors.grey.withOpacity(0.5),
+                                  ),
+                                ),
+                                Text(
+                                  peer.online ? 'в сети' : 'не в сети',
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      color: Theme.of(context)
+                                          .textTheme
+                                          .titleLarge
+                                          ?.color
+                                          ?.withOpacity(0.55)),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      checkBoxOrActionMoreLandscape(peer, isTile: false),
+                    ],
+                  ),
+                  const Spacer(),
+                  Text(
+                    formatID(peer.id),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 19,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.4,
+                      fontFeatures: [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                  Tooltip(
+                    message: _showNote(peer) ? '$name\\n${peer.note}' : name,
+                    waitDuration: const Duration(seconds: 1),
+                    child: Text(
+                      _showNote(peer) ? peer.note : name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 11,
+                          color: Theme.of(context)
+                              .textTheme
+                              .titleLarge
+                              ?.color
+                              ?.withOpacity(0.55)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final colors = _frontN(peer.tags, 25)"""
+
+
+def restyle_peer_cards(path: Path) -> None:
+    """Плитки компьютеров: своя карточка вместо цветного блока RustDesk."""
+    source = path.read_text(encoding="utf-8")
+    if "RemIT: своя карточка компьютера" in source:
+        print(f"Карточки компьютеров уже перерисованы в {path} — пропускаем.")
+        return
+    if source.count(PEER_CARD_START) != 1:
+        raise SystemExit(f"{path}: не найдено начало карточки компьютера — обновите скрипт.")
+    start = source.index(PEER_CARD_START)
+    end = source.find(PEER_CARD_END, start)
+    if end < 0:
+        raise SystemExit(f"{path}: не найден конец карточки компьютера — обновите скрипт.")
+    source = source[:start] + PEER_CARD_NEW + source[end + len(PEER_CARD_END):]
+    # Ключик «пароль сохранён» — в правый нижний угол, чтобы не лежал на значке системы.
+    key_old = """          Positioned(
+            top: 4,
+            left: 12,
+            child: Icon(Icons.key, size: 12, color: Colors.white),
+          ),"""
+    key_new = """          Positioned(
+            bottom: 12,
+            right: 12,
+            child: Icon(Icons.key,
+                size: 13, color: Theme.of(context).colorScheme.primary),
+          ),"""
+    if source.count(key_old) != 1:
+        raise SystemExit(f"{path}: не найден значок сохранённого пароля — обновите скрипт.")
+    source = source.replace(key_old, key_new, 1)
+    path.write_text(source, encoding="utf-8")
+    print(f"Карточки компьютеров перерисованы в {path}")
+
+
 STATUS_IMPORT_ANCHOR = "import 'package:flutter_hbb/models/state_model.dart';"
 STATUS_IMPORT = "import 'package:flutter_hbb/remit_status.dart';"
 
@@ -1915,14 +2124,17 @@ def brand_uri_scheme(root: Path, app_name: str) -> None:
 
 
 def brand_update_file_names(root: Path, app_name: str) -> None:
-    """Имя скачанного обновления: remit-1.4.9.19-x86_64.exe вместо rustdesk-….
+    """Имя скачанного обновления: RemIT-1.4.9.19-x86_64.exe вместо rustdesk-….
 
-    Программа сохраняет обновление во временную папку под именем, которое
-    собирает сама, и запускает его с правами администратора — это имя видно
-    клиенту в окне запроса прав. Сайту префикс не важен: файл он подбирает по
-    расширению и архитектуре (lib/updates.ts, resolveDownload).
+    Программа просит у сервера обновлений файл с тем же именем, под которым
+    он лежит в выпуске (сборка публикует RemIT-…, gen-workflow.py), сохраняет
+    его во временную папку и запускает с правами администратора — это имя
+    видно человеку в окне запроса прав. Сайт подбирает файл по расширению и
+    архитектуре (lib/updates.ts, resolveDownload), так что старые клиенты с
+    именами rustdesk-… и remit-… обновляются так же.
     """
-    prefix = f"{app_name.lower()}-"
+    prefix = f"{app_name}-"
+    old_prefix = f"{app_name.lower()}-"
     patches = {
         "src/updater.rs": [
             ('"{}/rustdesk-{}-{}.{}",', '"{}/' + prefix + '{}-{}.{}",'),
@@ -1931,7 +2143,11 @@ def brand_update_file_names(root: Path, app_name: str) -> None:
         "src/flutter_ffi.rs": [('format!("rustdesk-{_version}-', 'format!("' + prefix + '{_version}-')],
         # Уборка старых скачанных обновлений во временной папке.
         "src/platform/windows.rs": [
-            ('file_name.starts_with("rustdesk-")', f'(file_name.starts_with("rustdesk-") || file_name.starts_with("{prefix}"))'),
+            (
+                'file_name.starts_with("rustdesk-")',
+                f'(file_name.starts_with("rustdesk-") || file_name.starts_with("{prefix}")'
+                f' || file_name.starts_with("{old_prefix}"))',
+            ),
         ],
     }
     for relative, replacements in patches.items():
@@ -2124,6 +2340,13 @@ def main() -> int:
     connection_page = args.root / "flutter" / "lib" / "desktop" / "pages" / "connection_page.dart"
     if connection_page.is_file():
         restyle_connect_box(connection_page)
+    remote_toolbar = args.root / "flutter" / "lib" / "desktop" / "widgets" / "remote_toolbar.dart"
+    if remote_toolbar.is_file():
+        write_session_widget(args.root, site_url)
+        restyle_session_toolbar(remote_toolbar)
+    peer_card = args.root / "flutter" / "lib" / "common" / "widgets" / "peer_card.dart"
+    if peer_card.is_file():
+        restyle_peer_cards(peer_card)
     flutter_main = args.root / "flutter" / "lib" / "main.dart"
     if flutter_main.is_file():
         enlarge_install_page(flutter_main)

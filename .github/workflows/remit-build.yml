@@ -461,6 +461,18 @@ jobs:
         run: |
           BASE_URL=${{ env.SIGN_BASE_URL }} SECRET_KEY=${{ secrets.SIGN_SECRET_KEY }} python3 res/job.py sign_files ./SignOutput
 
+      - name: Фирменные имена файлов выпуска (RemIT)
+        if: env.UPLOAD_ARTIFACT == 'true'
+        shell: bash
+        run: |
+          APP="${{ vars.REMIT_APP_NAME || 'RemIT' }}"
+          shopt -s nullglob
+          for f in ./SignOutput/rustdesk-*.msi ./SignOutput/rustdesk-*.exe; do
+            b="$(basename "$f")"
+            cp -f "$f" "$(dirname "$f")/${APP}${b#rustdesk}"
+            echo "$f -> ${APP}${b#rustdesk}"
+          done
+
       - name: Publish Release
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         if: env.UPLOAD_ARTIFACT == 'true'
@@ -468,8 +480,8 @@ jobs:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
           files: |
-            ./SignOutput/rustdesk-*.msi
-            ./SignOutput/rustdesk-*.exe
+            ./SignOutput/${{ vars.REMIT_APP_NAME || 'RemIT' }}-*.msi
+            ./SignOutput/${{ vars.REMIT_APP_NAME || 'RemIT' }}-*.exe
 
   build-for-macOS:
     name: ${{ matrix.job.target }}
@@ -714,6 +726,18 @@ jobs:
               mv "$name" "${name%%.dmg}-${{ matrix.job.arch }}.dmg"
           done
 
+      - name: Фирменные имена файлов выпуска (RemIT)
+        if: env.UPLOAD_ARTIFACT == 'true'
+        shell: bash
+        run: |
+          APP="${{ vars.REMIT_APP_NAME || 'RemIT' }}"
+          shopt -s nullglob
+          for f in rustdesk*-${{ matrix.job.arch }}.dmg; do
+            b="$(basename "$f")"
+            cp -f "$f" "$(dirname "$f")/${APP}${b#rustdesk}"
+            echo "$f -> ${APP}${b#rustdesk}"
+          done
+
       - name: Publish DMG package
         if: env.UPLOAD_ARTIFACT == 'true'
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
@@ -721,7 +745,7 @@ jobs:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
           files: |
-            rustdesk*-${{ matrix.job.arch }}.dmg
+            ${{ vars.REMIT_APP_NAME || 'RemIT' }}*-${{ matrix.job.arch }}.dmg
 
   build-rustdesk-linux:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.linux }}
@@ -1019,6 +1043,18 @@ jobs:
                 mv "$name" /workspace/"${name%%.rpm}-suse.rpm"
             done
 
+      - name: Фирменные имена файлов выпуска (RemIT)
+        if: env.UPLOAD_ARTIFACT == 'true'
+        shell: bash
+        run: |
+          APP="${{ vars.REMIT_APP_NAME || 'RemIT' }}"
+          shopt -s nullglob
+          for f in rustdesk-*.deb rustdesk-*.rpm; do
+            b="$(basename "$f")"
+            cp -f "$f" "$(dirname "$f")/${APP}${b#rustdesk}"
+            echo "$f -> ${APP}${b#rustdesk}"
+          done
+
       - name: Publish debian/rpm package
         if: env.UPLOAD_ARTIFACT == 'true'
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
@@ -1026,8 +1062,8 @@ jobs:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
           files: |
-            rustdesk-*.deb
-            rustdesk-*.rpm
+            ${{ vars.REMIT_APP_NAME || 'RemIT' }}-*.deb
+            ${{ vars.REMIT_APP_NAME || 'RemIT' }}-*.rpm
 
       - name: Upload deb
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -1055,6 +1091,18 @@ jobs:
           scripts: |
             cd res && HBB=`pwd`/.. FLUTTER=1 makepkg -f
 
+      - name: Фирменные имена файлов выпуска (RemIT)
+        if: matrix.job.arch == 'x86_64' && env.UPLOAD_ARTIFACT == 'true'
+        shell: bash
+        run: |
+          APP="${{ vars.REMIT_APP_NAME || 'RemIT' }}"
+          shopt -s nullglob
+          for f in res/rustdesk-${{ env.VERSION }}*.zst; do
+            b="$(basename "$f")"
+            cp -f "$f" "$(dirname "$f")/${APP}${b#rustdesk}"
+            echo "$f -> ${APP}${b#rustdesk}"
+          done
+
       - name: Publish archlinux package
         if: matrix.job.arch == 'x86_64' && env.UPLOAD_ARTIFACT == 'true'
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
@@ -1062,7 +1110,7 @@ jobs:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
           files: |
-            res/rustdesk-${{ env.VERSION }}*.zst
+            res/${{ vars.REMIT_APP_NAME || 'RemIT' }}-${{ env.VERSION }}*.zst
 
   build-appimage:
     name: Build appimage ${{ matrix.job.target }}
@@ -1105,6 +1153,18 @@ jobs:
           pushd appimage
           sudo appimage-builder --skip-tests --recipe ./AppImageBuilder-${{ matrix.job.arch }}.yml
 
+      - name: Фирменные имена файлов выпуска (RemIT)
+        if: env.UPLOAD_ARTIFACT == 'true'
+        shell: bash
+        run: |
+          APP="${{ vars.REMIT_APP_NAME || 'RemIT' }}"
+          shopt -s nullglob
+          for f in ./appimage/rustdesk-${{ env.VERSION }}-*.AppImage; do
+            b="$(basename "$f")"
+            cp -f "$f" "$(dirname "$f")/${APP}${b#rustdesk}"
+            echo "$f -> ${APP}${b#rustdesk}"
+          done
+
       - name: Publish appimage package
         if: env.UPLOAD_ARTIFACT == 'true'
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
@@ -1112,4 +1172,4 @@ jobs:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
           files: |
-            ./appimage/rustdesk-${{ env.VERSION }}-*.AppImage
+            ./appimage/${{ vars.REMIT_APP_NAME || 'RemIT' }}-${{ env.VERSION }}-*.AppImage
